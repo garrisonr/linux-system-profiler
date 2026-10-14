@@ -5,6 +5,9 @@
    Light tokens first, dark under prefers-color-scheme where the distro
    ships both. */
 
+/* — Bondi: Dickles' own theme — candy iMac era, smoke graphite + Bondi blue — */
+[data-theme="bondi"] { color-scheme: dark; --accent:#2ba3c7; --ink:#e8e8ea; --ink-2:#a8a8b0; --paper:rgba(35,35,38,.94); --rail:rgba(27,27,30,.96); --line:rgba(255,255,255,.1); --radius:9px; --card-radius:12px; --blur:18px; --green:#a8c73c; --amber:#f2912c; --red:#e05a4e; font-family:system-ui,"Inter",sans-serif; }
+
 /* — Zorin OS: Zorin Blue, pale panels, Inter — */
 [data-theme="zorin"] { --accent:#175ddc; --ink:#1b1d21; --ink-2:#5f6368; --paper:rgba(255,255,255,.85); --rail:rgba(242,244,247,.88); --line:rgba(0,0,0,.09); --radius:8px; --card-radius:12px; font-family:"Inter",system-ui,sans-serif; }
 @media (prefers-color-scheme: dark) { [data-theme="zorin"] { --ink:#eef1f5; --ink-2:#a7adb6; --paper:rgba(32,34,38,.86); --rail:rgba(24,25,28,.9); --line:rgba(255,255,255,.1); } }

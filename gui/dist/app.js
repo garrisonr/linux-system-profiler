@@ -33,13 +33,14 @@ const SECTIONS = [
 // Engines = distinct design languages. Distros = DistroWatch top 20 (plus
 // Dickles' picks); several distros share a language, noted in the gallery.
 const ENGINES = {
-  cupertino: "Cupertino", omarchy: "Omarchy", ubuntu: "Ubuntu · Yaru", fedora: "Fedora · Adwaita",
+  bondi: "Bondi", cupertino: "Cupertino", omarchy: "Omarchy", ubuntu: "Ubuntu · Yaru", fedora: "Fedora · Adwaita",
   zorin: "Zorin OS", elementary: "elementary OS", deepin: "Deepin", pop: "Pop!_OS · COSMIC",
   mint: "Linux Mint · Mint-Y", breeze: "KDE · Breeze", opensuse: "openSUSE", manjaro: "Manjaro",
   liquidglass: "Liquid Glass", materialyou: "Material You",
   endeavour: "EndeavourOS", garuda: "Garuda", peppermint: "Peppermint", mx: "MX Linux", phosh: "Phosh (mobile)",
 };
 const ENGINE_PREVIEW = { // bg, ink, accent — theme cards preview their own theme
+  bondi: ["#232326", "#e8e8ea", "#2ba3c7"],
   cupertino: ["#f5f5f7", "#1d1d1f", "#2ba3c7"], omarchy: ["#1a1b26", "#c0caf5", "#7aa2f7"],
   ubuntu: ["#f7f7f7", "#2c2c2c", "#e95420"], fedora: ["#f6f5f4", "#241f19", "#3584e4"],
   zorin: ["#f2f4f7", "#1b1d21", "#175ddc"], elementary: ["#fafafa", "#333333", "#3689e6"],
