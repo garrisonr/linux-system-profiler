@@ -1,0 +1,21 @@
+[package]
+name = "linux-system-profiler"
+version = "0.7.0"
+edition = "2021"
+license = "MIT"
+description = "Apple System Information, for Linux — unified hardware/software profile with a check-only updates hub"
+
+[lib]
+name = "linux_system_profiler"
+path = "src/lib.rs"
+
+[[bin]]
+name = "linux-system-profiler"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+libc = "0.2"
+ureq = { version = "3", features = ["rustls"] }

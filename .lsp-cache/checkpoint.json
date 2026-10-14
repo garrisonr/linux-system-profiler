@@ -1,0 +1,195 @@
+{
+  "accounts": [
+    {
+      "admin": true,
+      "home": "/root",
+      "last_login": null,
+      "name": "root",
+      "shell": "/bin/bash",
+      "uid": 0
+    }
+  ],
+  "bluetooth": [],
+  "cpu": {
+    "cache_l3": "32 MiB (1 instance)",
+    "cores_physical": 2,
+    "cur_mhz": null,
+    "flags_sample": [
+      "fpu",
+      "vme",
+      "de",
+      "pse",
+      "tsc",
+      "msr",
+      "pae",
+      "mce",
+      "cx8",
+      "apic",
+      "sep",
+      "mtrr",
+      "pge",
+      "mca",
+      "cmov",
+      "pat",
+      "pse36",
+      "clflush",
+      "mmx",
+      "fxsr",
+      "sse",
+      "sse2",
+      "ht",
+      "syscall"
+    ],
+    "max_mhz": null,
+    "model_name": "AMD EPYC 9D25 126-Core Processor",
+    "sockets": 1,
+    "temp_c": null,
+    "threads_logical": 2,
+    "tjmax_c": null,
+    "vendor": "AuthenticAMD",
+    "virtualization": "running under hypervisor"
+  },
+  "displays": [],
+  "graphics": [],
+  "memory": {
+    "available_kb": 941292,
+    "modules": [],
+    "swap_total_kb": 0,
+    "total_kb": 8125588
+  },
+  "network": [
+    {
+      "addresses": [
+        "198.19.0.2/30",
+        "fd8b:4f84:7d32:99::2/64",
+        "fe80::70dc:7cff:fe34:2ffd/64"
+      ],
+      "driver": null,
+      "is_virtual": true,
+      "kind": "Virtual",
+      "mac": "72:dc:7c:34:2f:fd",
+      "name": "host0",
+      "operstate": "up",
+      "speed_mbps": null,
+      "wifi": null
+    }
+  ],
+  "power": [],
+  "printers": [],
+  "security": {
+    "firewall_active": false,
+    "firewall_service": null,
+    "luks_volumes": 0,
+    "sshd_active": false
+  },
+  "software": {
+    "docker_images": [],
+    "docker_status": null,
+    "explicit_packages": [],
+    "extra": {},
+    "flatpaks_count": null,
+    "gcc_runtime": "libstdc++.so.6 (libc6,x86-64) => /lib/x86_64-linux-gnu/libstdc++.so.6",
+    "glibc": "ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39",
+    "last_upgrade": null,
+    "loaded_modules_count": 0,
+    "loaded_modules_sample": [],
+    "package_manager": "dpkg",
+    "packages_count": 788,
+    "running_services_count": 1,
+    "snaps": []
+  },
+  "storage": [
+    {
+      "fstype": null,
+      "link": null,
+      "model": null,
+      "mountpoints": [],
+      "name": "vda",
+      "percentage_used": null,
+      "power_on_hours": null,
+      "rotational": true,
+      "serial": null,
+      "size_bytes": 7915700224,
+      "smart_health": null,
+      "smart_temp_c": null,
+      "tran": null
+    },
+    {
+      "fstype": null,
+      "link": null,
+      "model": null,
+      "mountpoints": [],
+      "name": "vdb",
+      "percentage_used": null,
+      "power_on_hours": null,
+      "rotational": true,
+      "serial": null,
+      "size_bytes": 8053063680,
+      "smart_health": null,
+      "smart_temp_c": null,
+      "tran": null
+    },
+    {
+      "fstype": null,
+      "link": null,
+      "model": null,
+      "mountpoints": [],
+      "name": "vdc",
+      "percentage_used": null,
+      "power_on_hours": null,
+      "rotational": true,
+      "serial": null,
+      "size_bytes": 946885632,
+      "smart_health": null,
+      "smart_temp_c": null,
+      "tran": null
+    },
+    {
+      "fstype": null,
+      "link": null,
+      "model": null,
+      "mountpoints": [],
+      "name": "vdd",
+      "percentage_used": null,
+      "power_on_hours": null,
+      "rotational": false,
+      "serial": null,
+      "size_bytes": 107374182400,
+      "smart_health": null,
+      "smart_temp_c": null,
+      "tran": null
+    }
+  ],
+  "system": {
+    "arch": "x86_64",
+    "bios_date": null,
+    "bios_vendor": "cloud-hypervisor",
+    "bios_version": "0",
+    "board_name": null,
+    "board_vendor": null,
+    "chassis_type": null,
+    "desktop": null,
+    "kernel": "7.0.0-39-generic",
+    "manufacturer": "Cloud Hypervisor",
+    "os_id": "ubuntu",
+    "os_name": "Ubuntu 24.04.5 LTS",
+    "os_version_id": "24.04",
+    "product_name": "cloud-hypervisor",
+    "product_version": null,
+    "secure_boot": null,
+    "session_type": null,
+    "uptime_seconds": 4630
+  },
+  "volumes": [
+    {
+      "avail_bytes": 61437550592,
+      "device": "/dev/mapper/rv",
+      "fs_type": "btrfs",
+      "mount": "/home/hatch",
+      "size_bytes": 107355308032,
+      "subvolume": "/",
+      "use_percent": 43,
+      "used_bytes": 44789702656
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+# Linux System Profiler (working name)
+
+Apple's System Information, for Linux — plus the thing Apple never gave it:
+a single place to see and apply **driver, firmware, and software updates**.
+
+**Status: v0.2.0 — CLI core + Tauri GUI.** Apple design language,
+adaptive desktop / laptop / tablet / phone layouts (see `gui/` + `DESIGN.md`).
+
+**Dependencies self-heal (Dickles' rule — no half-broken software):** if probe
+tools are missing (`usbutils`, `smartmontools`, `pciutils`, `fwupd`,
+`pacman-contrib`), the profiler installs them itself on first run via your
+package manager — targeted `pacman -S --needed` (never a surprise full-system
+upgrade), elevated with pkexec in graphical sessions / sudo headless.
+`--no-deps` opts out. The GUI shows the same check as a one-click banner.
+
+## Why this exists
+Linux already has `lshw`, `inxi`, Hardinfo2, `hw-probe`, `fastfetch`… scattered,
+inconsistent, none of them Apple-clean, and none of them closes the loop from
+*"here's your hardware"* to *"here's what's out of date and how to fix it."*
+This tool unifies them: one topology tree, health flags with hints, and a
+check-only updates hub (pacman / fwupd-LVFS / Flatpak).
+
+## Run it
+```bash
+cargo build --release
+./target/release/linux-system-profiler                 # tree view (auto-installs missing probe tools first)
+./target/release/linux-system-profiler --format json --out profile.json
+./target/release/linux-system-profiler --format forum --out forum-post.md
+./target/release/linux-system-profiler --resume        # reuse checkpoints after an interrupted run
+```
+
+## v0.1 coverage (from Lumo's checklist)
+1. Hardware topology from `/sys`, `/proc`, `lspci`, `lsusb` — unified tree ✔
+2. Firmware & power: DMI/BIOS, Secure Boot, battery health + cycles ✔ (dmidecode detail needs root — polkit in GUI phase)
+3. Storage: lsblk hierarchy + SMART health / temp / endurance via smartctl ✔ (when installed + permitted)
+4. Network: state, negotiated speed, driver, addresses, Wi-Fi link ✔
+5. Graphics: DRM cards, driver-in-use, displays (Wayland `wlr-randr` / X11 `xrandr`) ✔
+6. Software: kernel modules, glibc/libstdc++, package counts, services ✔
+7. Exports: JSON (SP-inspired schema), Markdown ✔
+8. Troubleshooting: sanitized Copy-for-Forum export ✔ · health hints ✔
+9. Dashboard: color-coded health flags in tree view ✔ (interactive GUI next)
+10. Compatibility: LVFS firmware-update surfacing ✔ · Linux Hardware DB lookups = roadmap
+
+**Updates are CHECK-ONLY in v0.1.** Nothing is applied, ever, without an
+explicit user action in the GUI phase.
+
+## Rules this project follows
+- Rust only. Resume-able everything (atomic checkpoints). Verify values, not counts.
+- Apple design guidelines for every UI surface. No per-dialog invented controls.
+- No bundled copyrighted assets. Original code, MIT license.
+- Preliminary name screen done 2026-10-13 — see `docs/LEGAL-SCREEN.md`.
+  **Do not register domains or publish under this name until Dickles locks a final name.**
+
+## v0.3 — QA fixes, Belarc parity, speed tests
+- **Clipboard that actually copies**: Copy for Forum now writes to the real
+  system clipboard (X11 + Wayland) and confirms with a toast; if the
+  clipboard is unreachable you get a select-all text view instead of silence.
+- **Network, redesigned**: physical interfaces as a clean health-style list
+  with kind chips and sane speeds; Docker bridges, veth pairs and VPN tunnels
+  grouped under Virtual interfaces. IPv4 first, link-local last.
+- **Belarc-parity additions** (the parts that make sense on Linux): display
+  inventory from EDID (model, size, year, resolution), CUPS printers, user
+  accounts with admin flags and last logins, a security-posture section
+  (firewall, LUKS volumes, sshd, Secure Boot), mounted volumes with free
+  space, explicitly-installed package list, last full-upgrade date, and
+  paired Bluetooth devices. Sanitized exports hash usernames and drop
+  home paths/login lines entirely.
+- **Speed tests, on demand only**: disk sequential write/read with O_DIRECT
+  (`--disk-test`, Storage pane) and network latency/download/upload against
+  Cloudflare (`--speed-test`, Network pane). They never run during profiling.
+- About pane; sidebar footer buttons stack so labels never overflow.

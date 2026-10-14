@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Linux System Profiler
+GenericName=System Information
+Comment=See everything about your PC — hardware, health, software, and updates
+Exec=linux-system-profiler
+Icon=linux-system-profiler
+Terminal=false
+Categories=System;Monitor;HardwareSettings;
+Keywords=system;hardware;information;profiler;updates;smart;memory;
+StartupNotify=true

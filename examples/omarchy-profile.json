@@ -1,0 +1,433 @@
+{
+  "audio": [
+    "34\tauto_null\tPipeWire\tfloat32le 2ch 48000Hz\tSUSPENDED"
+  ],
+  "cpu": {
+    "cache_l3": "6 MiB (1 instance)",
+    "cores_physical": 4,
+    "cur_mhz": 2699.518,
+    "flags_sample": [
+      "fpu",
+      "vme",
+      "de",
+      "pse",
+      "tsc",
+      "msr",
+      "pae",
+      "mce",
+      "cx8",
+      "apic",
+      "sep",
+      "mtrr",
+      "pge",
+      "mca",
+      "cmov",
+      "pat",
+      "pse36",
+      "clflush",
+      "dts",
+      "acpi",
+      "mmx",
+      "fxsr",
+      "sse",
+      "sse2"
+    ],
+    "max_mhz": 3400.0,
+    "model_name": "Intel(R) N95",
+    "sockets": 1,
+    "threads_logical": 4,
+    "vendor": "GenuineIntel",
+    "virtualization": null
+  },
+  "displays": [],
+  "generated_at": "2026-10-13T14:23:28Z",
+  "graphics": [
+    {
+      "card": "card1",
+      "driver_in_use": "i915",
+      "vendor_device": "0x8086:0x46d2",
+      "vram_mb": null
+    }
+  ],
+  "health": [
+    {
+      "component": "Security",
+      "hint": null,
+      "message": "Secure Boot is disabled",
+      "severity": "info"
+    }
+  ],
+  "hostname": "omarchy",
+  "memory": {
+    "available_kb": 10232840,
+    "modules": [],
+    "swap_total_kb": 32279924,
+    "total_kb": 16139892
+  },
+  "network": [
+    {
+      "addresses": [
+        "172.18.0.1/16",
+        "fe80::4c50:dbff:fe08:99b3/64"
+      ],
+      "driver": null,
+      "mac": "00:00:00:00:00:00",
+      "name": "br-1ed0651fab1f",
+      "operstate": "up",
+      "speed_mbps": 10000,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "172.17.0.1/16",
+        "fe80::4049:9ff:fe89:e9b5/64"
+      ],
+      "driver": null,
+      "mac": "00:00:00:00:00:00",
+      "name": "docker0",
+      "operstate": "up",
+      "speed_mbps": 10000,
+      "wifi": null
+    },
+    {
+      "addresses": [],
+      "driver": "r8169",
+      "mac": "00:00:00:00:00:00",
+      "name": "enp2s0",
+      "operstate": "down",
+      "speed_mbps": -1,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "192.168.1.158/24",
+        "2600:1006:a131:89c4:9bd:46f7:45cb:931b/64",
+        "fe80::f09:8619:3ba4:f6b1/64"
+      ],
+      "driver": "r8169",
+      "mac": "00:00:00:00:00:00",
+      "name": "enp4s0",
+      "operstate": "up",
+      "speed_mbps": 1000,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "fdeb:446c:912d:8da::/64",
+        "fe80::78b6:f1f4:97f1:6011/64"
+      ],
+      "driver": null,
+      "mac": "00:00:00:00:00:00",
+      "name": "ipv6leakintrf0",
+      "operstate": "unknown",
+      "speed_mbps": null,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "10.2.0.2/32"
+      ],
+      "driver": null,
+      "mac": null,
+      "name": "proton0",
+      "operstate": "unknown",
+      "speed_mbps": null,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "100.64.184.32/32",
+        "fd7a:115c:a1e0::9e2b:b821/128",
+        "fe80::701a:88d7:a063:53a3/64"
+      ],
+      "driver": null,
+      "mac": null,
+      "name": "tailscale0",
+      "operstate": "unknown",
+      "speed_mbps": -1,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "fe80::f848:a0ff:fe59:ce0/64"
+      ],
+      "driver": null,
+      "mac": "00:00:00:00:00:00",
+      "name": "veth3de06f6",
+      "operstate": "up",
+      "speed_mbps": 10000,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "fe80::fcc3:8cff:fed3:4fd9/64"
+      ],
+      "driver": null,
+      "mac": "00:00:00:00:00:00",
+      "name": "veth55d29b2",
+      "operstate": "up",
+      "speed_mbps": 10000,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "fe80::8cdd:e2ff:feb9:a8ab/64"
+      ],
+      "driver": null,
+      "mac": "00:00:00:00:00:00",
+      "name": "veth71a4580",
+      "operstate": "up",
+      "speed_mbps": 10000,
+      "wifi": null
+    },
+    {
+      "addresses": [
+        "fe80::5037:97ff:fe0e:b7e/64"
+      ],
+      "driver": null,
+      "mac": "00:00:00:00:00:00",
+      "name": "vethf43f1b4",
+      "operstate": "up",
+      "speed_mbps": 10000,
+      "wifi": null
+    },
+    {
+      "addresses": [],
+      "driver": "rtw89_8852be",
+      "mac": "00:00:00:00:00:00",
+      "name": "wlp3s0",
+      "operstate": "down",
+      "speed_mbps": null,
+      "wifi": {
+        "phy_modes": "DEVTYPE=wlan\nINTERFACE=wlp3s0\nIFINDEX=4",
+        "signal_dbm": null
+      }
+    }
+  ],
+  "pci": [
+    {
+      "description": "Intel Corporation Device 4618",
+      "driver": null,
+      "id": "00:00.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N [UHD Graphics]",
+      "driver": null,
+      "id": "00:02.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCH USB 3.2 Gen 2x1 (10 Gb/s) xHCI Host Controller",
+      "driver": null,
+      "id": "00:14.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCH Shared SRAM",
+      "driver": null,
+      "id": "00:14.2"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCH HECI Controller",
+      "driver": null,
+      "id": "00:16.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N SATA AHCI Controller",
+      "driver": null,
+      "id": "00:17.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N I2C Controller #4",
+      "driver": null,
+      "id": "00:19.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N I2C Controller #5",
+      "driver": null,
+      "id": "00:19.1"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N eMMC Controller",
+      "driver": null,
+      "id": "00:1a.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCI Express Root Port #3",
+      "driver": null,
+      "id": "00:1c.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCI Express Root Port #7",
+      "driver": null,
+      "id": "00:1c.6"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCI Express Root Port #9",
+      "driver": null,
+      "id": "00:1d.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCI Express Root Port #10",
+      "driver": null,
+      "id": "00:1d.1"
+    },
+    {
+      "description": "Intel Corporation Device 5482",
+      "driver": null,
+      "id": "00:1f.0"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N PCH High Definition Audio Controller",
+      "driver": null,
+      "id": "00:1f.3"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N SMBus",
+      "driver": null,
+      "id": "00:1f.4"
+    },
+    {
+      "description": "Intel Corporation Alder Lake-N SPI (flash) Controller",
+      "driver": null,
+      "id": "00:1f.5"
+    },
+    {
+      "description": "Realtek Semiconductor Co., Ltd. RTS5772DL NVMe SSD Controller (DRAM-less)",
+      "driver": null,
+      "id": "01:00.0"
+    },
+    {
+      "description": "Realtek Semiconductor Co., Ltd. RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet Controller",
+      "driver": null,
+      "id": "02:00.0"
+    },
+    {
+      "description": "Realtek Semiconductor Co., Ltd. RTL8852BE PCIe 802.11ax Wireless Network Controller",
+      "driver": null,
+      "id": "03:00.0"
+    },
+    {
+      "description": "Realtek Semiconductor Co., Ltd. RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet Controller",
+      "driver": null,
+      "id": "04:00.0"
+    }
+  ],
+  "power": [],
+  "schema_version": 1,
+  "software": {
+    "extra": {},
+    "flatpaks_count": null,
+    "gcc_runtime": "libstdc++.so.6 (libc6,x86-64) => /usr/lib/libstdc++.so.6",
+    "glibc": "ldd (GNU libc) 2.44",
+    "loaded_modules_count": 212,
+    "loaded_modules_sample": [
+      "tcp_diag",
+      "inet_diag",
+      "nf_conntrack_netlink",
+      "xt_nat",
+      "veth",
+      "bridge",
+      "stp",
+      "llc",
+      "xfrm_user",
+      "xfrm_algo",
+      "xt_set",
+      "ip_set",
+      "overlay",
+      "nft_ct",
+      "nft_fib_ipv4",
+      "nft_fib",
+      "wireguard",
+      "libcurve25519",
+      "ip6_udp_tunnel",
+      "udp_tunnel",
+      "dummy",
+      "snd_seq_dummy",
+      "snd_hrtimer",
+      "rfcomm",
+      "snd_seq",
+      "xt_connmark",
+      "xt_MASQUERADE",
+      "xt_mark",
+      "nft_chain_nat",
+      "nf_nat",
+      "tun",
+      "algif_hash",
+      "algif_skcipher",
+      "af_alg",
+      "bnep",
+      "snd_hda_codec_intelhdmi",
+      "snd_hda_codec_hdmi",
+      "snd_hda_intel",
+      "snd_sof_pci_intel_tgl",
+      "snd_sof_pci_intel_cnl"
+    ],
+    "package_manager": "pacman",
+    "packages_count": 1175,
+    "running_services_count": 29
+  },
+  "storage": [
+    {
+      "fstype": null,
+      "link": null,
+      "model": "superdog",
+      "mountpoints": [],
+      "name": "nvme0n1",
+      "percentage_used": null,
+      "power_on_hours": null,
+      "rotational": false,
+      "serial": "2307VF001C2B0430",
+      "size_bytes": 2048408248320,
+      "smart_health": null,
+      "smart_temp_c": null,
+      "tran": null
+    },
+    {
+      "fstype": null,
+      "link": null,
+      "model": null,
+      "mountpoints": [],
+      "name": "zram0",
+      "percentage_used": null,
+      "power_on_hours": null,
+      "rotational": false,
+      "serial": null,
+      "size_bytes": 16526606336,
+      "smart_health": null,
+      "smart_temp_c": null,
+      "tran": null
+    }
+  ],
+  "system": {
+    "arch": "x86_64",
+    "bios_date": "08/10/2023",
+    "bios_vendor": "American Megatrends International, LLC.",
+    "bios_version": "5.27",
+    "board_name": "Default string",
+    "board_vendor": "Default string",
+    "chassis_type": "3",
+    "desktop": null,
+    "kernel": "7.2.5-3-omarchy",
+    "manufacturer": "Default string",
+    "os_id": "omarchy",
+    "os_name": "Omarchy",
+    "os_version_id": "4.0.4",
+    "product_name": "Default string",
+    "product_version": "Default string",
+    "secure_boot": "disabled",
+    "session_type": "tty",
+    "uptime_seconds": 47981
+  },
+  "tool_version": "0.1.0",
+  "updates": {
+    "checked": true,
+    "firmware_updates": [],
+    "flatpak_updates": [],
+    "notes": [
+      "pacman -Qu returned nothing (up to date, or checkupdates not run)",
+      "Tip: `checkupdates` gives a sync-free count without root.",
+      "fwupd: no firmware updates reported."
+    ],
+    "system_updates": []
+  },
+  "usb": []
+}

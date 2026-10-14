@@ -1,0 +1,5 @@
+target/
+gui/src-tauri/target/
+*.log
+BUILD_RESULT
+review/

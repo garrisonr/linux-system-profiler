@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System Profiler</title>
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="themes.css">
+<script>try{var t=localStorage.getItem("lsp-theme");if(t&&t!=="auto")document.documentElement.dataset.theme=t;}catch(e){}</script>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <div class="machine-name" id="machineName">This Computer</div>
+      <div class="machine-sub" id="machineSub">Gathering profile…</div>
+    </div>
+    <nav class="tree" id="tree" aria-label="Profile sections"></nav>
+    <div class="sidebar-foot">
+      <select class="theme-select" id="themeSelect" aria-label="Theme">
+        <option value="auto">Auto (this system)</option>
+        <option value="cupertino">Cupertino</option>
+        <option value="omarchy">Omarchy</option>
+        <option value="ubuntu">Ubuntu</option>
+        <option value="fedora">Fedora</option>
+        <option value="zorin">Zorin OS</option>
+        <option value="elementary">elementary</option>
+        <option value="deepin">Deepin</option>
+        <option value="pop">Pop!_OS</option>
+        <option value="mint">Mint</option>
+        <option value="breeze">KDE Breeze</option>
+        <option value="opensuse">openSUSE</option>
+        <option value="manjaro">Manjaro</option>
+        <option value="endeavour">EndeavourOS</option>
+        <option value="garuda">Garuda</option>
+        <option value="peppermint">Peppermint</option>
+        <option value="mx">MX Linux</option>
+        <option value="phosh">Phosh</option>
+        <option value="liquidglass">Liquid Glass</option>
+        <option value="materialyou">Material You</option>
+      </select>
+      <button class="pill secondary" id="refreshBtn" type="button">Refresh</button>
+      <button class="pill secondary" id="exportBtn" type="button">Copy &amp; Share</button>
+    </div>
+  </aside>
+
+  <main class="detail">
+    <div class="banner hidden" id="depBanner" role="alert">
+      <div class="banner-text" id="depBannerText"></div>
+      <button class="pill primary" id="depInstallBtn" type="button">Install missing tools</button>
+    </div>
+    <header class="detail-head">
+      <button class="pill secondary back-btn" id="backBtn" type="button">‹ Sections</button>
+      <h1 id="detailTitle">Overview</h1>
+      <div class="detail-sub" id="detailSub"></div>
+    </header>
+    <section class="detail-body" id="detailBody">
+      <p class="empty">Reading your hardware — one moment.</p>
+    </section>
+  </main>
+
+  <aside class="rail" id="healthRail">
+    <h2 id="railTitle">Health</h2>
+    <div id="railBody"></div>
+  </aside>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<dialog class="sheet" id="shareSheet">
+  <div class="sheet-head"><h2>Copy &amp; Share</h2>
+  <button class="pill secondary" id="shareClose" type="button">Done</button></div>
+  <div class="share-list">
+    <button type="button" class="share-opt" data-share="copy:sanitized"><strong>Copy sanitized report</strong><span>Markdown, safe for forums — serials, MACs, usernames stripped</span></button>
+    <button type="button" class="share-opt" data-share="copy:full-md"><strong>Copy full report</strong><span>Markdown with everything, for your own notes</span></button>
+    <button type="button" class="share-opt" data-share="copy:json"><strong>Copy profile JSON</strong><span>The complete machine-readable profile</span></button>
+    <button type="button" class="share-opt" data-share="save:sanitized"><strong>Save sanitized report…</strong><span>Markdown file, forum-safe</span></button>
+    <button type="button" class="share-opt" data-share="save:json"><strong>Save profile JSON…</strong><span>Full profile as a file</span></button>
+    <button type="button" class="share-opt" data-share="email:x"><strong>Email summary…</strong><span>Opens your mail client with the highlights</span></button>
+  </div>
+</dialog>
+
+<dialog class="sheet" id="exportSheet">
+  <div class="sheet-head"><h2>Share — manual copy</h2>
+  <button class="pill secondary" id="exportClose" type="button">Done</button></div>
+  <p class="empty">The clipboard was not reachable, so here is the sanitized report — select it and copy manually.</p>
+  <textarea class="export-text" id="exportText" readonly rows="14"></textarea>
+  <div class="row"><button class="pill primary" id="exportSelect" type="button">Select all</button></div>
+</dialog>
+
+<dialog class="sheet" id="logSheet">
+  <div class="sheet-head"><h2 id="logTitle">Log</h2>
+  <button class="pill secondary" id="logClose" type="button">Close</button></div>
+  <p class="detail-sub" id="logStatus"></p>
+  <pre class="log" id="logBody"></pre>
+</dialog>
+
+<dialog class="sheet" id="confirmSheet">
+  <div class="sheet-head"><h2 id="confirmTitle">Update</h2></div>
+  <p id="confirmBody"></p>
+  <div class="row" style="justify-content:flex-end">
+    <button class="pill secondary" id="confirmCancel" type="button">Cancel</button>
+    <button class="pill primary" id="confirmOk" type="button">Update now</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
