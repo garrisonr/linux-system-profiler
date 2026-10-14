@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Linux System Profiler — app icon, Fable Files family language.
+       Full-bleed rounded tile (r=89, same ratio as the Fable anchor),
+       Bondi-blue gradient tint, ONE bold flat white glyph: a gauge
+       (arc band + needle + hub) drawn as a single silhouette.
+       Original artwork; geometry matches make_icon.py in the project records. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1D7FA6"/>
+      <stop offset="1" stop-color="#3AADD2"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="89" fill="url(#g)"/>
+  <g fill="#ffffff">
+    <path d="M 120.1 319.4 A 150 150 0 1 1 391.9 319.4 L 348.4 299.1 A 102 102 0 1 0 163.6 299.1 Z"/>
+    <polygon points="269.0,266.9 331.8,165.6 243.0,245.1"/>
+    <circle cx="256" cy="256" r="27"/>
+  </g>
+</svg>

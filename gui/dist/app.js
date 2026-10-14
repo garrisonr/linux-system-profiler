@@ -101,6 +101,89 @@ function applyTheme(pref, p) {
   return resolved;
 }
 
+/* ---------------- theme dropdown (custom — never a native select) -------
+   v0.8: the native <select> rendered as a giant white box under dark
+   schemes. This is the house pattern instead: a 2rem button + listbox in
+   app tokens, full keyboard support (arrows, Home/End, Enter, Esc,
+   type-ahead). Sorted A–Z with Auto pinned, same as the old list. */
+const THEME_OPTIONS = [
+  ["auto", "Auto (this system)"], ["bondi", "Bondi"], ["cupertino", "Cupertino"],
+  ["deepin", "Deepin"], ["elementary", "elementary"], ["endeavour", "EndeavourOS"],
+  ["fedora", "Fedora"], ["garuda", "Garuda"], ["breeze", "KDE Breeze"],
+  ["liquidglass", "Liquid Glass"], ["manjaro", "Manjaro"], ["materialyou", "Material You"],
+  ["mint", "Mint"], ["mx", "MX Linux"], ["omarchy", "Omarchy"],
+  ["opensuse", "openSUSE"], ["peppermint", "Peppermint"], ["phosh", "Phosh"],
+  ["pop", "Pop!_OS"], ["ubuntu", "Ubuntu"], ["zorin", "Zorin OS"],
+];
+const themeControl = {
+  value: "auto",
+  get() { return this.value; },
+  set(v) { // silent: control state + label only — callers persist/apply
+    this.value = v;
+    const found = THEME_OPTIONS.find(([id]) => id === v);
+    $("themeLabel").textContent = found ? found[1] : v;
+    $("themePop").querySelectorAll(".dropdown-opt").forEach((el) =>
+      el.setAttribute("aria-selected", String(el.dataset.value === v)));
+  },
+};
+function buildThemeDropdown() {
+  $("themePop").innerHTML = THEME_OPTIONS.map(([v, label]) =>
+    `<button type="button" class="dropdown-opt" role="option" data-value="${v}" aria-selected="${v === themeControl.value}"><span class="check" aria-hidden="true">✓</span><span>${esc(label)}</span></button>`).join("");
+  $("themePop").querySelectorAll(".dropdown-opt").forEach((el) =>
+    el.addEventListener("click", () => { pickTheme(el.dataset.value); closeThemePop(); $("themeBtn").focus(); }));
+}
+function themePopOpen() { return !$("themePop").classList.contains("hidden"); }
+function openThemePop() {
+  $("themePop").classList.remove("hidden");
+  $("themeBtn").setAttribute("aria-expanded", "true");
+  setActiveOpt(themeControl.value);
+}
+function closeThemePop() {
+  $("themePop").classList.add("hidden");
+  $("themeBtn").setAttribute("aria-expanded", "false");
+}
+function setActiveOpt(v) {
+  let target = null;
+  $("themePop").querySelectorAll(".dropdown-opt").forEach((el) => {
+    const on = el.dataset.value === v;
+    el.classList.toggle("active", on);
+    if (on) target = el;
+  });
+  if (target) target.scrollIntoView({ block: "nearest" });
+}
+function pickTheme(v) {
+  themeControl.set(v);
+  try { localStorage.setItem("lsp-theme", v); } catch (err) {}
+  const resolved = applyTheme(v, P);
+  showToast("Theme: " + (v === "auto" ? ENGINES[resolved] + " (auto-matched)" : ENGINES[v]));
+}
+function themeKeyNav(e) {
+  const opts = [...$("themePop").querySelectorAll(".dropdown-opt")];
+  if (!opts.length) return;
+  const cur = opts.findIndex((el) => el.classList.contains("active"));
+  if (e.key === "Escape") { if (themePopOpen()) { closeThemePop(); $("themeBtn").focus(); } return; }
+  if (!themePopOpen()) {
+    if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) { e.preventDefault(); openThemePop(); }
+    return;
+  }
+  let n = null;
+  if (e.key === "ArrowDown") n = Math.min(opts.length - 1, cur + 1);
+  else if (e.key === "ArrowUp") n = Math.max(0, cur - 1);
+  else if (e.key === "Home") n = 0;
+  else if (e.key === "End") n = opts.length - 1;
+  else if (e.key === "Enter" || e.key === " ") {
+    const a = opts[Math.max(0, cur)];
+    if (a) { pickTheme(a.dataset.value); closeThemePop(); }
+    e.preventDefault();
+    return;
+  } else if (/^[a-z0-9]$/i.test(e.key)) {
+    const k = e.key.toLowerCase();
+    const f = opts.findIndex((el) => el.textContent.trim().toLowerCase().startsWith(k));
+    if (f >= 0) n = f;
+  }
+  if (n != null) { e.preventDefault(); setActiveOpt(opts[n].dataset.value); }
+}
+
 /* ---------------- shared render helpers ---------------- */
 function kvTable(rows) {
   const body = rows.filter(([, v]) => v !== undefined && v !== null && v !== "")
@@ -418,6 +501,13 @@ const VIEWS = {
         ["Dependencies", "Missing probe tools (lsusb, smartctl, lspci, fwupdmgr) are detected and can be installed with one click — the app fixes its own dependencies."],
         ["License", "MIT"],
       ]);
+    h += `<h3>Help &amp; feedback</h3>
+      <p>Found something wrong, or wishing for a feature? File it where the work happens. The bug form arrives pre-filled with this machine's basics — versions and hardware, never serials or addresses.</p>
+      <div class="row" style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.625rem 0">
+        <button type="button" class="pill secondary" data-feedback="bug">Report a Bug</button>
+        <button type="button" class="pill secondary" data-feedback="feature">Request a Feature</button>
+      </div>
+      <p class="empty">github.com/garrisonr/linux-system-profiler/issues</p>`;
     h += `<h3>Themes — every top-20 distro covered</h3>
       <p>Themes are organized by <em>design language</em>. Distros that share one (say, Debian and Fedora, both GNOME/Adwaita) are covered by the same theme — the note under each says which family it belongs to. Auto matches this machine's distro.</p>
       <div class="theme-grid">` +
@@ -486,10 +576,12 @@ function wireDetail() {
     b.addEventListener("click", () => {
       const v = b.dataset.enginePick;
       try { localStorage.setItem("lsp-theme", v); } catch (e) {}
-      $("themeSelect").value = v;
+      themeControl.set(v);
       applyTheme(v, P);
       showToast("Theme: " + ENGINES[v]);
     }));
+  document.querySelectorAll("[data-feedback]").forEach((b) =>
+    b.addEventListener("click", () => openFeedback(b.dataset.feedback)));
   document.querySelectorAll(".gauge").forEach((el) =>
     gaugeInit(el, el.dataset.gauge === "disk" ? 2000 : 1000));
   if (gauges.size && !reducedMotion) requestAnimationFrame(gaugeStep);
@@ -720,6 +812,62 @@ async function runSpeed(btn) {
   btn.textContent = label;
 }
 
+/* ---------------- feedback: Report a Bug / Request a Feature ------------
+   Universal law (2026-10-14): every app carries both. They open the
+   project's GitHub issue forms in the browser; the bug form is pre-filled
+   with this machine's basics (never serials, MACs, or addresses). */
+async function openFeedback(kind) {
+  const base = "https://github.com/garrisonr/linux-system-profiler/issues/new";
+  const themeNow = themeControl.get() === "auto"
+    ? (document.documentElement.dataset.theme || "cupertino") : themeControl.get();
+  const machine = [P.system.manufacturer, P.system.product_name].filter(Boolean).join(" ") || "—";
+  let title, body;
+  if (kind === "bug") {
+    title = "[Bug] ";
+    body = ["## What happened", "", "<!-- What did you see, and what did you expect instead? -->", "",
+      "## This machine (auto-filled — edit freely)",
+      `- Profiler: v${P.tool_version} (profile schema v${P.schema_version})`,
+      `- OS: ${P.system.os_name || "—"} · kernel ${P.system.kernel || "—"}`,
+      `- Machine: ${machine}`,
+      `- CPU: ${P.cpu.model_name || "—"}`,
+      `- Theme: ${themeNow}`, ""].join("\n");
+  } else {
+    title = "[Feature] ";
+    body = ["## What would you like the Profiler to do?", "", "<!-- The job it would do for you, in your own words. -->", "",
+      "## Anything else", "",
+      `- Profiler: v${P.tool_version} · OS: ${P.system.os_name || "—"}`, ""].join("\n");
+  }
+  const url = base + "?labels=" + (kind === "bug" ? "bug" : "enhancement") +
+    "&title=" + encodeURIComponent(title) + "&body=" + encodeURIComponent(body);
+  try {
+    await invoke("open_url", { url });
+    showToast(kind === "bug" ? "Opening the bug report form in your browser…" : "Opening the feature request form in your browser…");
+  } catch (e) {
+    const copied = await invoke("copy_text", { text: url }).catch(() => false);
+    showToast(copied
+      ? "Couldn't open your browser — the form link is on your clipboard instead"
+      : "File it at github.com/garrisonr/linux-system-profiler/issues");
+  }
+}
+
+/* ---------------- dependencies: self-heal, presented calmly --------------
+   The backend classifies every failure; this UI never shows raw tool
+   output. A missing polkit agent (classic when the app was launched
+   outside the desktop session) becomes guidance + a copyable manual
+   command, not an error dump. */
+function setDepActions(actions) {
+  const box = $("depBannerActions");
+  box.innerHTML = "";
+  for (const a of actions) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pill " + (a.primary ? "primary" : "secondary");
+    b.textContent = a.label;
+    b.addEventListener("click", a.run);
+    box.appendChild(b);
+  }
+}
+
 async function checkDeps() {
   try {
     const st = await invoke("get_dep_status");
@@ -727,6 +875,7 @@ async function checkDeps() {
       $("depBannerText").textContent =
         `Missing probe tools: ${st.missing.join(", ")} — ${st.missing_features.join("; ")}. ` +
         `Sections would come back empty without them.`;
+      setDepActions([{ label: "Install missing tools", primary: true, run: runDepInstall }]);
       $("depBanner").classList.remove("hidden");
     } else {
       $("depBanner").classList.add("hidden");
@@ -734,15 +883,84 @@ async function checkDeps() {
   } catch (e) { /* older backend without the command: stay silent */ }
 }
 
+async function runDepInstall() {
+  const box = $("depBannerActions");
+  box.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  const primary = box.querySelector(".primary");
+  if (primary) primary.textContent = "Installing…";
+  let r;
+  try {
+    r = await invoke("install_deps");
+  } catch (e) { // the IPC call itself failed — still calm, still no raw dump
+    $("depBannerText").textContent = "The install couldn't be started from the app — nothing was changed.";
+    setDepActions([{ label: "Try again", primary: true, run: runDepInstall }]);
+    return;
+  }
+  if (r.ok) {
+    showToast(r.kind === "already" ? "All probe tools are already installed" : "Probe tools installed — refreshing");
+    $("depBanner").classList.add("hidden");
+    await load();
+    return;
+  }
+  if (r.kind === "cancelled") {
+    showToast(r.message);
+    setDepActions([{ label: "Install missing tools", primary: true, run: runDepInstall }]);
+    return;
+  }
+  // no-agent / unavailable / failed — guidance, a way forward, details on request
+  $("depBannerText").textContent = r.message;
+  const acts = [{ label: "Try again", primary: true, run: runDepInstall }];
+  if (r.manual_command) {
+    acts.push({ label: "Copy install command", run: async () => {
+      const copied = await invoke("copy_text", { text: r.manual_command }).catch(() => false);
+      if (copied) showToast("Copied — paste it into a terminal to install the tools");
+      else showLog("Install from a terminal", "Run this command in a terminal:\n\n" + r.manual_command);
+    }});
+  }
+  acts.push({ label: "Details", run: () => showLog("Install details", r.detail || r.message) });
+  setDepActions(acts);
+}
+
+/* ---------------- loading: skeleton + live stage narration ---------------
+   The skeleton Overview is static HTML (first paint is already the right
+   shape, in the engine's colors). Collector stages stream in as
+   "profile-progress" events and narrate the stage line; when the profile
+   lands, the real sections rise in staggered. Progress is decoration — if
+   the event channel is unavailable the profile still arrives (v0.3 lesson). */
+const STAGE_LABELS = {
+  system: "reading system information", cpu: "reading the CPU", memory: "reading memory",
+  storage: "reading storage & SMART health", network: "reading network interfaces",
+  graphics: "reading graphics", displays: "reading displays", volumes: "reading volumes",
+  printers: "reading printers", bluetooth: "reading Bluetooth", accounts: "reading accounts",
+  security: "checking security posture", power: "reading power & batteries",
+  devices: "reading PCI & USB devices", audio: "reading audio",
+  software: "reading installed software", updates: "checking for updates",
+};
+let profileLoading = false;
+async function watchProgress() {
+  try {
+    await listen("profile-progress", (e) => {
+      if (!profileLoading) return;
+      const el = $("loadStage");
+      if (el) el.textContent = (STAGE_LABELS[e.payload] || e.payload) + "…";
+    });
+  } catch (err) { /* no narration; the wait is the same, the profile still lands */ }
+}
+
 async function load() {
+  profileLoading = true;
   P = await invoke("get_profile");
+  profileLoading = false;
   let pref = "auto";
   try { pref = localStorage.getItem("lsp-theme") || "auto"; } catch (e) {}
-  $("themeSelect").value = pref;
+  themeControl.set(pref);
   applyTheme(pref, P);
   $("machineName").textContent = P.hostname || "This Computer";
   $("machineSub").textContent = [P.system.os_name, P.cpu.model_name].filter(Boolean).join(" · ");
+  $("detailBody").removeAttribute("aria-busy");
+  $("detailBody").classList.add("reveal");
   select(current);
+  setTimeout(() => $("detailBody").classList.remove("reveal"), 900);
   await checkDeps();
 }
 
@@ -750,11 +968,10 @@ async function load() {
 $("refreshBtn").addEventListener("click", load);
 $("backBtn").addEventListener("click", () => $("app").classList.remove("show-detail"));
 $("logClose").addEventListener("click", () => $("logSheet").close());
-$("themeSelect").addEventListener("change", (e) => {
-  const v = e.target.value;
-  try { localStorage.setItem("lsp-theme", v); } catch (err) {}
-  const resolved = applyTheme(v, P);
-  showToast("Theme: " + (v === "auto" ? ENGINES[resolved] + " (auto-matched)" : ENGINES[v]));
+$("themeBtn").addEventListener("click", () => (themePopOpen() ? closeThemePop() : openThemePop()));
+$("themeDropdown").addEventListener("keydown", themeKeyNav);
+document.addEventListener("pointerdown", (e) => {
+  if (themePopOpen() && !$("themeDropdown").contains(e.target)) closeThemePop();
 });
 
 // Copy & Share sheet
@@ -780,16 +997,7 @@ document.querySelectorAll("[data-share]").forEach((b) =>
   }));
 $("exportSelect").addEventListener("click", () => { $("exportText").focus(); $("exportText").select(); });
 $("exportClose").addEventListener("click", () => $("exportSheet").close());
-$("depInstallBtn").addEventListener("click", async () => {
-  $("depInstallBtn").disabled = true;
-  try {
-    const log = await invoke("install_deps");
-    showLog("Dependency install", log);
-  } catch (e) {
-    showLog("Dependency install failed", String(e));
-  }
-  $("depInstallBtn").disabled = false;
-  await load();
-});
+buildThemeDropdown();
+watchProgress();
 
 load().catch((e) => { $("detailBody").innerHTML = `<p class="empty">Failed to load profile: ${esc(String(e))}</p>`; });

@@ -87,20 +87,134 @@ pub fn install_command(st: &DepStatus) -> Option<(String, Vec<String>)> {
     Some((elevate.to_string(), args))
 }
 
-/// Run the install. Returns a human log of what happened.
+/// Why an install did not complete — classified so callers can respond
+/// calmly and specifically instead of dumping raw tool output on the user.
+/// Dickles' law (2026-10-14, strengthened): no published software may EVER
+/// show a user a dependency error. Raw pkexec/package-manager stderr lives
+/// only in `detail`, behind an explicit details view — never in `message`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallErrorKind {
+    /// No graphical authentication agent could be reached (classic case:
+    /// the app was launched detached from the user's login session, so
+    /// pkexec fell back to a textual agent with no terminal to talk to).
+    NoAgent,
+    /// The user dismissed or denied the password prompt.
+    Cancelled,
+    /// No supported package manager / elevation tool on this system.
+    Unavailable,
+    /// The install ran but did not finish.
+    Failed,
+}
+
+impl InstallErrorKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            InstallErrorKind::NoAgent => "no-agent",
+            InstallErrorKind::Cancelled => "cancelled",
+            InstallErrorKind::Unavailable => "unavailable",
+            InstallErrorKind::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InstallError {
+    pub kind: InstallErrorKind,
+    /// Calm, user-facing summary. Never contains raw tool output.
+    pub message: String,
+    /// Technical detail for an explicit details/log view only.
+    pub detail: String,
+}
+
+impl std::fmt::Display for InstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+impl std::error::Error for InstallError {}
+
+/// The manual equivalent of the automated install, for the details view —
+/// if the app can't elevate from this session, the user can still run one
+/// command in a terminal instead of being stranded.
+pub fn manual_command(st: &DepStatus) -> Option<String> {
+    if st.packages_to_install.is_empty() { return None; }
+    let pkgs = st.packages_to_install.join(" ");
+    match st.package_manager.as_deref() {
+        Some("pacman") => Some(format!("sudo pacman -S --needed {pkgs}")),
+        Some("apt") => Some(format!("sudo apt-get install -y {pkgs}")),
+        Some("dnf") => Some(format!("sudo dnf install -y {pkgs}")),
+        _ => None,
+    }
+}
+
+fn tail_lines(text: &str, n: usize, max_chars: usize) -> String {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut out = lines[lines.len().saturating_sub(n)..].join("\n");
+    if out.chars().count() > max_chars {
+        out = out.chars().rev().take(max_chars).collect::<String>()
+            .chars().rev().collect();
+    }
+    out
+}
+
+/// Run the install. On success returns a human log of what happened.
+/// On failure returns a classified InstallError: `message` is always calm
+/// and safe to show; raw tool output is confined to `detail`.
 /// In the GUI this runs behind the polkit prompt pkexec shows; in the CLI it
 /// uses pkexec when present, else sudo (which may prompt for a password).
-pub fn install_deps(st: &DepStatus) -> Result<String, String> {
-    let (elevate, args) = install_command(st)
-        .ok_or_else(|| "No supported package manager / elevation tool found".to_string())?;
+pub fn install_deps(st: &DepStatus) -> Result<String, InstallError> {
+    let (elevate, args) = install_command(st).ok_or_else(|| InstallError {
+        kind: InstallErrorKind::Unavailable,
+        message: "These tools can't be installed automatically on this system.".into(),
+        detail: "No supported package manager (pacman/apt/dnf) or elevation tool (pkexec/sudo) was found.".into(),
+    })?;
     let plan = format!("{} {}", elevate, args.join(" "));
-    let out = Command::new(&elevate).args(&args).output()
-        .map_err(|e| format!("failed to launch install ({plan}): {e}"))?;
+    let out = Command::new(&elevate).args(&args).output().map_err(|e| InstallError {
+        kind: InstallErrorKind::Failed,
+        message: "The install couldn't be started.".into(),
+        detail: format!("failed to launch `{plan}`: {e}"),
+    })?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if out.status.success() {
-        Ok(format!("installed via `{plan}`\n{stdout}"))
+        return Ok(format!("installed via `{plan}`\n{stdout}"));
+    }
+    // Classify — pkexec exits 126 when the user dismisses/denies the prompt,
+    // and its no-agent fallback dies complaining about a textual
+    // authentication agent with no controlling terminal. Both are session
+    // problems, not dependency errors, and are presented that way.
+    let err_text = format!("{stdout}\n{stderr}").to_lowercase();
+    let manual = manual_command(st).unwrap_or_default();
+    if err_text.contains("textual authentication agent")
+        || err_text.contains("no authentication agent")
+        || err_text.contains("authentication agent")
+    {
+        Err(InstallError {
+            kind: InstallErrorKind::NoAgent,
+            message: "The tools are ready to install, but this session can't show the \
+                      administrator password prompt — the app may have been launched \
+                      outside your desktop session.".into(),
+            detail: format!(
+                "The system password agent wasn't reachable from this session, so the \
+                 elevated install never started. Launching the app from your desktop's \
+                 app menu usually fixes this. Plan was: `{plan}`. \
+                 Manual equivalent: `{manual}`"),
+        })
+    } else if out.status.code() == Some(126)
+        || err_text.contains("dismissed")
+        || err_text.contains("not authorized")
+    {
+        Err(InstallError {
+            kind: InstallErrorKind::Cancelled,
+            message: "Install cancelled — nothing was changed.".into(),
+            detail: format!("The password prompt was dismissed or denied. Plan was: `{plan}`"),
+        })
     } else {
-        Err(format!("install failed via `{plan}`\n{stdout}\n{stderr}"))
+        Err(InstallError {
+            kind: InstallErrorKind::Failed,
+            message: "The install didn't finish — the missing sections stay empty until \
+                      the tools are installed.".into(),
+            detail: format!("Plan was: `{plan}`\n{}", tail_lines(&stderr, 4, 400)),
+        })
     }
 }

@@ -3,22 +3,28 @@
 Apple's System Information, for Linux — plus the thing Apple never gave it:
 a single place to see and apply **driver, firmware, and software updates**.
 
-**Status: v0.2.0 — CLI core + Tauri GUI.** Apple design language,
-adaptive desktop / laptop / tablet / phone layouts (see `gui/` + `DESIGN.md`).
+**Status: v0.8.0 — close-out release.** CLI core + Tauri GUI shipped and
+dogfooded on real hardware; feature-complete, maintenance-only from here.
+Apple design language, adaptive desktop / laptop / tablet / phone layouts
+(see `gui/` + `DESIGN.md`). Nineteen theme engines (Auto matches your
+system), Report a Bug / Request a Feature in the About pane.
 
 **Dependencies self-heal (Dickles' rule — no half-broken software):** if probe
 tools are missing (`usbutils`, `smartmontools`, `pciutils`, `fwupd`,
 `pacman-contrib`), the profiler installs them itself on first run via your
-package manager — targeted `pacman -S --needed` (never a surprise full-system
-upgrade), elevated with pkexec in graphical sessions / sudo headless.
-`--no-deps` opts out. The GUI shows the same check as a one-click banner.
+package manager — targeted installs (never a surprise full-system upgrade),
+elevated with pkexec in graphical sessions / sudo headless. `--no-deps` opts
+out. The GUI shows the same check as a one-click banner — and if the system's
+password agent can't be reached from the app's session, it says so calmly
+with a retry and a copyable terminal command instead of dumping raw errors.
 
 ## Why this exists
 Linux already has `lshw`, `inxi`, Hardinfo2, `hw-probe`, `fastfetch`… scattered,
 inconsistent, none of them Apple-clean, and none of them closes the loop from
 *"here's your hardware"* to *"here's what's out of date and how to fix it."*
-This tool unifies them: one topology tree, health flags with hints, and a
-check-only updates hub (pacman / fwupd-LVFS / Flatpak).
+This tool unifies them: one topology tree, health flags with hints, and an
+updates hub (pacman / fwupd-LVFS / Flatpak) that checks on load and applies
+only on an explicit, elevated action per group.
 
 ## Run it
 ```bash
@@ -29,27 +35,27 @@ cargo build --release
 ./target/release/linux-system-profiler --resume        # reuse checkpoints after an interrupted run
 ```
 
-## v0.1 coverage (from Lumo's checklist)
+## Coverage (from Lumo's checklist)
 1. Hardware topology from `/sys`, `/proc`, `lspci`, `lsusb` — unified tree ✔
-2. Firmware & power: DMI/BIOS, Secure Boot, battery health + cycles ✔ (dmidecode detail needs root — polkit in GUI phase)
+2. Firmware & power: DMI/BIOS, Secure Boot, battery health + cycles ✔ (dmidecode detail elevates via polkit in the GUI)
 3. Storage: lsblk hierarchy + SMART health / temp / endurance via smartctl ✔ (when installed + permitted)
 4. Network: state, negotiated speed, driver, addresses, Wi-Fi link ✔
 5. Graphics: DRM cards, driver-in-use, displays (Wayland `wlr-randr` / X11 `xrandr`) ✔
 6. Software: kernel modules, glibc/libstdc++, package counts, services ✔
 7. Exports: JSON (SP-inspired schema), Markdown ✔
 8. Troubleshooting: sanitized Copy-for-Forum export ✔ · health hints ✔
-9. Dashboard: color-coded health flags in tree view ✔ (interactive GUI next)
+9. Dashboard: color-coded health flags in tree view ✔ · full interactive GUI ✔
 10. Compatibility: LVFS firmware-update surfacing ✔ · Linux Hardware DB lookups = roadmap
 
-**Updates are CHECK-ONLY in v0.1.** Nothing is applied, ever, without an
-explicit user action in the GUI phase.
+**Update rule (standing):** the hub checks automatically; nothing is ever
+applied without an explicit, elevated user action, one group at a time.
 
 ## Rules this project follows
 - Rust only. Resume-able everything (atomic checkpoints). Verify values, not counts.
 - Apple design guidelines for every UI surface. No per-dialog invented controls.
 - No bundled copyrighted assets. Original code, MIT license.
 - Preliminary name screen done 2026-10-13 — see `docs/LEGAL-SCREEN.md`.
-  **Do not register domains or publish under this name until Dickles locks a final name.**
+  Still a working name; no domains registered under it.
 
 ## v0.3 — QA fixes, Belarc parity, speed tests
 - **Clipboard that actually copies**: Copy for Forum now writes to the real
@@ -69,3 +75,23 @@ explicit user action in the GUI phase.
   (`--disk-test`, Storage pane) and network latency/download/upload against
   Cloudflare (`--speed-test`, Network pane). They never run during profiling.
 - About pane; sidebar footer buttons stack so labels never overflow.
+
+## v0.8.0 — close-out (2026-10-14)
+- **New app icon** in the shared icon family (Fable Files is the anchor):
+  full-bleed rounded Bondi-blue tile, one bold flat white gauge glyph —
+  SVG master + PNG/ICO/ICNS set under `gui/src-tauri/icons/`.
+- **Chrome that respects the desktop**: the window paints a solid base in
+  the active engine's own color edge-to-edge (no wallpaper bleed-through or
+  clashing frame), and native controls/scrollbars follow `color-scheme`.
+- **Real theme dropdown**: custom themed listbox, keyboard accessible
+  (arrows, Home/End, Enter, Esc, type-ahead) — the native `<select>` is gone.
+- **Loading state**: skeleton Overview in the engine's colors, a live stage
+  line narrated by the collectors ("reading storage & SMART health…",
+  "checking for updates…"), sections rising in as the profile lands.
+  Static skeletons under reduced-motion.
+- **Elevation grace**: unreachable password agent ⇒ calm in-app guidance,
+  a retry, and a copyable manual command. Raw tool output never reaches a
+  dialog; it lives behind an explicit Details view.
+- **Report a Bug / Request a Feature** in the About pane — bug reports are
+  pre-filled with this machine's basics (versions + hardware only; serials,
+  MACs, and addresses are never included).

@@ -15,31 +15,22 @@
       <div class="machine-name" id="machineName">This Computer</div>
       <div class="machine-sub" id="machineSub">Gathering profile…</div>
     </div>
-    <nav class="tree" id="tree" aria-label="Profile sections"></nav>
+    <nav class="tree" id="tree" aria-label="Profile sections">
+      <div class="skel-row"><span class="skel-bar w55"></span></div>
+      <div class="skel-row"><span class="skel-bar w40"></span></div>
+      <div class="skel-row"><span class="skel-bar w70"></span></div>
+      <div class="skel-row"><span class="skel-bar w40"></span></div>
+      <div class="skel-row"><span class="skel-bar w55"></span></div>
+      <div class="skel-row"><span class="skel-bar w70"></span></div>
+    </nav>
     <div class="sidebar-foot">
-      <select class="theme-select" id="themeSelect" aria-label="Theme">
-        <option value="auto">Auto (this system)</option>
-        <option value="bondi">Bondi</option>
-        <option value="cupertino">Cupertino</option>
-        <option value="deepin">Deepin</option>
-        <option value="elementary">elementary</option>
-        <option value="endeavour">EndeavourOS</option>
-        <option value="fedora">Fedora</option>
-        <option value="garuda">Garuda</option>
-        <option value="breeze">KDE Breeze</option>
-        <option value="liquidglass">Liquid Glass</option>
-        <option value="manjaro">Manjaro</option>
-        <option value="materialyou">Material You</option>
-        <option value="mint">Mint</option>
-        <option value="mx">MX Linux</option>
-        <option value="omarchy">Omarchy</option>
-        <option value="opensuse">openSUSE</option>
-        <option value="peppermint">Peppermint</option>
-        <option value="phosh">Phosh</option>
-        <option value="pop">Pop!_OS</option>
-        <option value="ubuntu">Ubuntu</option>
-        <option value="zorin">Zorin OS</option>
-        </select>
+      <div class="dropdown" id="themeDropdown">
+        <button type="button" class="dropdown-btn" id="themeBtn" aria-haspopup="listbox" aria-expanded="false" aria-label="Theme">
+          <span class="dropdown-label" id="themeLabel">Auto (this system)</span>
+          <span class="dropdown-chev" aria-hidden="true">⌄</span>
+        </button>
+        <div class="dropdown-pop hidden" id="themePop" role="listbox" aria-label="Theme"></div>
+      </div>
       <button class="pill secondary" id="refreshBtn" type="button">Refresh</button>
       <button class="pill secondary" id="exportBtn" type="button">Copy &amp; Share</button>
     </div>
@@ -48,15 +39,22 @@
   <main class="detail">
     <div class="banner hidden" id="depBanner" role="alert">
       <div class="banner-text" id="depBannerText"></div>
-      <button class="pill primary" id="depInstallBtn" type="button">Install missing tools</button>
+      <div class="banner-actions" id="depBannerActions">
+        <button class="pill primary" id="depInstallBtn" type="button">Install missing tools</button>
+      </div>
     </div>
     <header class="detail-head">
       <button class="pill secondary back-btn" id="backBtn" type="button">‹ Sections</button>
       <h1 id="detailTitle">Overview</h1>
       <div class="detail-sub" id="detailSub"></div>
     </header>
-    <section class="detail-body" id="detailBody">
-      <p class="empty">Reading your hardware — one moment.</p>
+    <section class="detail-body" id="detailBody" aria-busy="true">
+      <p class="load-stage" role="status"><span class="load-dot" aria-hidden="true"></span><span>Gathering profile — <span id="loadStage">starting…</span></span></p>
+      <div class="skel-card"><span class="skel-bar w40"></span><span class="skel-bar w70"></span><span class="skel-bar w55"></span></div>
+      <div class="skel-card"><span class="skel-bar w40"></span><span class="skel-bar w70"></span></div>
+      <div class="skel-card"><span class="skel-bar w55"></span><span class="skel-bar w70"></span><span class="skel-bar w40"></span></div>
+      <div class="skel-card"><span class="skel-bar w40"></span><span class="skel-bar w55"></span></div>
+      <div class="skel-card"><span class="skel-bar w70"></span><span class="skel-bar w40"></span></div>
     </section>
   </main>
 

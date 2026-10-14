@@ -25,11 +25,19 @@ fn cached_or_collect(cache: &State<ProfileCache>) -> Profile {
 }
 
 #[tauri::command]
-async fn get_profile(cache: State<'_, ProfileCache>) -> Result<Profile, String> {
+async fn get_profile(app: tauri::AppHandle, cache: State<'_, ProfileCache>) -> Result<Profile, String> {
     // v0.6: collection probes dozens of tools and can take seconds on slow
     // buses — run it off the IPC thread so the window never freezes on load.
     // (Tauri requires async commands with reference inputs to return Result.)
-    let p = tauri::async_runtime::spawn_blocking(|| collect_profile(true, None, false))
+    // v0.8: each collector stage is emitted as a "profile-progress" event so
+    // the loading screen can narrate the wait (skeletons + stage labels)
+    // instead of sitting on a dead gray slab.
+    let progress_app = app.clone();
+    let p = tauri::async_runtime::spawn_blocking(move || {
+        linux_system_profiler::collect_profile_with_progress(true, None, false, &|stage| {
+            let _ = progress_app.emit("profile-progress", stage);
+        })
+    })
         .await.map_err(|e| e.to_string())?;
     *cache.0.lock().unwrap() = Some(p.clone());
     Ok(p)
@@ -40,15 +48,66 @@ fn get_dep_status() -> DepStatus {
     deps::dep_status()
 }
 
+/// Outcome of a one-click dependency install. Failures are CLASSIFIED, never
+/// raw: `message` is calm and user-safe; tool output lives only in `detail`,
+/// which the UI shows solely behind an explicit details view (Dickles' law:
+/// no user ever sees a dependency error).
+#[derive(serde::Serialize)]
+struct InstallOutcome {
+    ok: bool,
+    kind: String, // installed | already | no-agent | cancelled | unavailable | failed
+    message: String,
+    detail: String,
+    packages: Vec<String>,
+    manual_command: Option<String>,
+}
+
 /// One-click install of missing probe tools. pkexec shows the system's own
 /// password prompt — the app never sees or handles the user's password.
 #[tauri::command]
-fn install_deps() -> Result<String, String> {
+fn install_deps() -> InstallOutcome {
     let st = deps::dep_status();
+    let manual = deps::manual_command(&st);
     if st.missing.is_empty() {
-        return Ok("All probe tools are already installed.".into());
+        return InstallOutcome {
+            ok: true, kind: "already".into(),
+            message: "All probe tools are already installed.".into(),
+            detail: String::new(), packages: vec![], manual_command: manual,
+        };
     }
-    deps::install_deps(&st)
+    match deps::install_deps(&st) {
+        Ok(log) => InstallOutcome {
+            ok: true, kind: "installed".into(),
+            message: format!("Installed: {}", st.packages_to_install.join(", ")),
+            detail: log, packages: st.packages_to_install.clone(), manual_command: manual,
+        },
+        Err(e) => InstallOutcome {
+            ok: false, kind: e.kind.as_str().into(),
+            message: e.message, detail: e.detail,
+            packages: st.packages_to_install.clone(), manual_command: manual,
+        },
+    }
+}
+
+/// Copy arbitrary text (e.g. the manual install command) to the clipboard.
+/// Returns false when the clipboard is unreachable — the caller then shows
+/// the text in a selectable view instead of failing silently.
+#[tauri::command]
+fn copy_text(text: String) -> bool {
+    clipboard_set(&text)
+}
+
+/// Open one of THIS app's own web pages (issue tracker). Allowlisted to the
+/// project repo so the frontend can never turn it into a generic launcher.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    const PREFIX: &str = "https://github.com/garrisonr/linux-system-profiler/";
+    if !url.starts_with(PREFIX) {
+        return Err("refusing to open an unexpected address".into());
+    }
+    Command::new("xdg-open").arg(&url).spawn()
+        .map_err(|e| format!("could not open your browser: {e}"))?;
+    Ok(())
 }
 
 fn sanitized_copy(p: &Profile) -> Profile {
@@ -268,7 +327,7 @@ fn main() {
         .manage(ProfileCache::default())
         .invoke_handler(tauri::generate_handler![
             get_profile, get_dep_status, install_deps, copy_forum,
-            share_copy, share_save, share_email,
+            share_copy, share_save, share_email, copy_text, open_url,
             run_disk_test, run_network_test, apply_updates, elevated_dmi
         ])
         .run(tauri::generate_context!())

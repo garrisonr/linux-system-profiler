@@ -45,7 +45,7 @@ pub fn ensure_deps(auto_install: bool) -> String {
     }
     match deps::install_deps(&st) {
         Ok(log) => format!("{msg} — installed automatically: {}", st.packages_to_install.join(" ")),
-        Err(e) => format!("{msg} — auto-install failed: {e}"),
+        Err(e) => format!("{msg} — auto-install failed: {} ({})", e.message, e.detail),
     }
 }
 
@@ -53,6 +53,18 @@ pub fn ensure_deps(auto_install: bool) -> String {
 /// checkpointed atomically as it completes; with `resume`, checkpointed
 /// collectors from an interrupted run are reused instead of re-probed.
 pub fn collect_profile(check_updates: bool, cache_dir: Option<PathBuf>, resume: bool) -> Profile {
+    collect_profile_with_progress(check_updates, cache_dir, resume, &|_| {})
+}
+
+/// Same as `collect_profile`, but `progress` is called with a stage key
+/// ("system", "cpu", "memory", "storage", …) as each collector STARTS, so a
+/// UI can narrate the wait honestly instead of showing a dead screen.
+pub fn collect_profile_with_progress(
+    check_updates: bool,
+    cache_dir: Option<PathBuf>,
+    resume: bool,
+    progress: &dyn Fn(&str),
+) -> Profile {
     let checkpoint_path = cache_dir.as_ref().map(|d| d.join("checkpoint.json"));
     let mut done: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     if resume {
@@ -71,6 +83,7 @@ pub fn collect_profile(check_updates: bool, cache_dir: Option<PathBuf>, resume: 
             if let Some(saved) = done.get($name) {
                 serde_json::from_value::<$ty>(saved.clone()).unwrap_or_default()
             } else {
+                progress($name);
                 let v: $ty = $fn;
                 if let Some(cp) = &checkpoint_path {
                     done.insert($name.to_string(), serde_json::to_value(&v).unwrap_or(serde_json::Value::Null));
@@ -106,8 +119,10 @@ pub fn collect_profile(check_updates: bool, cache_dir: Option<PathBuf>, resume: 
     p.security = collect!("security", model::SecurityInfo, collectors::collect_security());
     p.power = collect!("power", Vec<model::BatteryInfo>, collectors::collect_power());
     p.power_detail = collectors::collect_power_detail();
+    progress("devices");
     let (pci, usb) = collectors::collect_bus();
     p.pci = pci; p.usb = usb;
+    progress("audio");
     p.audio = collectors::collect_audio();
     p.software = collect!("software", model::SoftwareInfo, collectors::collect_software());
     p.updates = if check_updates {
