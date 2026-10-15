@@ -26,6 +26,7 @@ const SECTIONS = [
   ["software", "Software"],
   ["accounts", "Accounts & Security"],
   ["updates", "Updates"],
+  ["themes", "Themes"],
   ["about", "About"],
 ];
 
@@ -184,10 +185,70 @@ function themeKeyNav(e) {
   if (n != null) { e.preventDefault(); setActiveOpt(opts[n].dataset.value); }
 }
 
+/* ---------------- glossary: one hint component, curated copy ----------------
+   Plain-English glosses for the terms a smart non-expert would trip on
+   (Dickles, v0.8.5: "What does flags mean? If I don't know, other people
+   probably don't either… but make it beautiful. Don't overwhelm the
+   user."). A small muted "?" lives in the label — nowhere else — and the
+   gloss floats in the app's material. Copy is hand-written, kept in this
+   one map, zero marketing. */
+const GLOSSARY = {
+  sockets: { t: "Sockets, cores & threads", d: "A socket is a physical CPU slot on the board. Each CPU holds several cores — independent processors — and most cores run two threads: two instruction streams sharing one core's muscle.", w: "Threads help when many programs work at once; a single app's speed still leans on how fast one core is." },
+  l3: { t: "L3 cache", d: "The largest of the CPU's built-in memory shelves, shared by every core. It keeps the data the cores reach for most within a hair's breadth, instead of trekking out to the much slower RAM." },
+  flags: { t: "CPU flags", d: "The processor's capability list — each flag names something the chip can do in hardware. This row shows a sample, not the full list. Famous ones: vmx / svm run virtual machines, avx2 crunches media and AI math quickly, aes encrypts in hardware.", w: "Programs check the flags before taking a hardware shortcut — no flag, no shortcut." },
+  tjmax: { t: "TjMax & thermal headroom", d: "TjMax is the temperature ceiling the chip's maker set for it. Headroom is how far below that ceiling the CPU is running right now — near the ceiling, the chip slows itself down to stay safe." },
+  governor: { t: "CPU governor", d: "The kernel's policy for how eagerly the processor speeds up and slows down. “powersave” favors quiet and battery; “performance” holds the clock speeds high." },
+  epp: { t: "Energy performance preference", d: "A dial the system hands the CPU, from “give me everything” to “sip power”. The chip picks its clock speeds inside that hint." },
+  swap: { t: "Swap", d: "A reserved patch of disk the system uses as overflow memory when RAM fills up.", w: "Swap is far slower than RAM — a machine swapping hard feels like it's wading through mud." },
+  smart: { t: "S.M.A.R.T.", d: "Every modern drive grades its own health — error rates, reallocated sectors, wear — and reports a verdict. PASSED means the drive itself sees no signs of trouble.", w: "A failing grade is a back-up-now alarm, not a someday item. Drives rarely recover." },
+  wear: { t: "Endurance used", d: "How much of a solid-state drive's rated write lifetime has been spent, as the drive counts it. At 100% the warranty's write budget is used up — the drive usually keeps working, on borrowed time." },
+  virtual: { t: "Virtual interfaces", d: "Network connections that exist only in software, created by Docker, VPNs and virtual machines rather than by a physical port. They carry real traffic between containers, tunnels and guests." },
+  lvfs: { t: "LVFS & fwupd", d: "The Linux Vendor Firmware Service is the shared library where hardware makers publish firmware for Linux. fwupd checks it against your devices and installs what they're offered — system, SSD, dock and peripheral updates alike." },
+  phased: { t: "Phased updates", d: "Ubuntu releases some updates to a slice of machines at a time, widening the rollout over days to catch problems early. “Deferred due to phasing” means this machine hasn't been dealt in yet — the update installs on a later check, on its own." },
+  luks: { t: "LUKS encryption", d: "Linux's built-in full-disk encryption: the drive's contents stay scrambled until the passphrase unlocks them at boot. A stolen, powered-off machine gives up nothing." },
+};
+function hintBtn(key) {
+  const g = GLOSSARY[key];
+  if (!g) return "";
+  return `<button type="button" class="hint-q" data-hint="${key}" aria-haspopup="dialog" aria-expanded="false" aria-label="Explain: ${esc(g.t)}">?</button>`;
+}
+let glossAnchor = null;
+let glossJustOpened = false;
+function closeGloss() {
+  const c = $("glossCard");
+  if (c) c.classList.add("hidden");
+  if (glossAnchor) glossAnchor.setAttribute("aria-expanded", "false");
+  glossAnchor = null;
+}
+function openGloss(anchor, viaToggle) {
+  const g = GLOSSARY[anchor.dataset.hint];
+  const c = $("glossCard");
+  if (!g || !c) return;
+  if (glossAnchor === anchor && !c.classList.contains("hidden")) {
+    // A click toggles shut — unless this click is the tail of the
+    // focus/hover that just opened it (same gesture, not a new intent).
+    if (viaToggle && !glossJustOpened) closeGloss();
+    return;
+  }
+  closeGloss();
+  glossAnchor = anchor;
+  glossJustOpened = true;
+  setTimeout(() => { glossJustOpened = false; }, 350);
+  anchor.setAttribute("aria-expanded", "true");
+  c.innerHTML = `<h4>${esc(g.t)}</h4><p>${esc(g.d)}</p>` + (g.w ? `<p class="gloss-why">${esc(g.w)}</p>` : "");
+  c.classList.remove("hidden");
+  const r = anchor.getBoundingClientRect();
+  const w = Math.min(320, window.innerWidth - 24);
+  c.style.width = w + "px";
+  c.style.left = Math.min(Math.max(12, r.left - 8), window.innerWidth - w - 12) + "px";
+  const below = r.bottom + 8;
+  c.style.top = (below + 180 < window.innerHeight ? below : Math.max(12, r.top - 8 - c.offsetHeight)) + "px";
+}
+
 /* ---------------- shared render helpers ---------------- */
 function kvTable(rows) {
   const body = rows.filter(([, v]) => v !== undefined && v !== null && v !== "")
-    .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("");
+    .map(([k, v, hintKey]) => `<tr><th>${esc(k)}${hintKey ? hintBtn(hintKey) : ""}</th><td>${esc(v)}</td></tr>`).join("");
   return body ? `<table class="kv">${body}</table>` : `<p class="empty">Nothing reported.</p>`;
 }
 function cards(items, render) {
@@ -303,18 +364,18 @@ const VIEWS = {
   cpu(p) {
     return kvTable([
       ["Model", p.cpu.model_name], ["Vendor", p.cpu.vendor],
-      ["Sockets", p.cpu.sockets], ["Physical cores", p.cpu.cores_physical],
+      ["Sockets", p.cpu.sockets, "sockets"], ["Physical cores", p.cpu.cores_physical],
       ["Logical threads", p.cpu.threads_logical],
       ["Max frequency", p.cpu.max_mhz ? p.cpu.max_mhz.toFixed(0) + " MHz" : null],
-      ["L3 cache", p.cpu.cache_l3], ["Virtualization", p.cpu.virtualization],
-      ["Flags (sample)", p.cpu.flags_sample.join(" ")],
+      ["L3 cache", p.cpu.cache_l3, "l3"], ["Virtualization", p.cpu.virtualization],
+      ["Flags (sample)", p.cpu.flags_sample.join(" "), "flags"],
     ]);
   },
   memory(p) {
     let h = kvTable([
       ["Total", p.memory.total_kb != null ? gb(p.memory.total_kb * 1024) : null],
       ["Available", p.memory.available_kb != null ? gb(p.memory.available_kb * 1024) : null],
-      ["Swap total", p.memory.swap_total_kb != null ? gb(p.memory.swap_total_kb * 1024) : null],
+      ["Swap total", p.memory.swap_total_kb != null ? gb(p.memory.swap_total_kb * 1024) : null, "swap"],
     ]);
     if (p._dmiSerial) h += kvTable([["System serial (via dmidecode)", p._dmiSerial]]);
     if (p.memory.modules.length) {
@@ -332,12 +393,13 @@ const VIEWS = {
       const parts = [gb(d.size_bytes), d.tran || (d.name.startsWith("nvme") ? "NVMe" : null),
         d.rotational ? "rotational (HDD)" : "solid state",
         d.mountpoints && d.mountpoints.length ? "mounted " + d.mountpoints.join(", ") : null].filter(Boolean);
-      const smart = [d.smart_health ? "SMART: " + d.smart_health : null,
-        d.smart_temp_c != null ? d.smart_temp_c + "°C" : null,
+      const smartTail = [d.smart_temp_c != null ? d.smart_temp_c + "°C" : null,
         d.power_on_hours != null ? d.power_on_hours + " power-on hours" : null,
-        d.percentage_used != null ? "endurance " + d.percentage_used + "% used" : null].filter(Boolean);
+        d.percentage_used != null ? `endurance${hintBtn("wear")} ${d.percentage_used}% used` : null].filter(Boolean);
+      const smartLine = [d.smart_health ? `SMART${hintBtn("smart")}: ${esc(d.smart_health)}` : null,
+        ...smartTail].filter(Boolean).join(" · ");
       return `<div class="card"><h3>${esc(d.name)} — ${esc(d.model)}</h3><p>${parts.join(" · ")}</p>` +
-        (smart.length ? `<p>${smart.join(" · ")}</p>` : "") + `</div>`;
+        (smartLine ? `<p>${smartLine}</p>` : "") + `</div>`;
     });
     if (p.volumes.length) {
       // Deduplicate by physical device: a Btrfs pool mounts many subvolumes
@@ -397,17 +459,17 @@ const VIEWS = {
       <div class="row"><button class="pill primary" data-speed="net" type="button">Run network test</button>
       <span class="speed-final"></span></div></div>`;
     h += real.length ? real.map(row).join("") : `<p class="empty">No physical interfaces detected.</p>`;
-    if (virt.length) h += `<h3>Virtual interfaces</h3>` + virt.map(row).join("");
+    if (virt.length) h += `<h3>Virtual interfaces${hintBtn("virtual")}</h3>` + virt.map(row).join("");
     return h;
   },
   power(p) {
     const d = p.power_detail || {};
     let h = kvTable([
       ["CPU package temperature", p.cpu.temp_c != null ? p.cpu.temp_c.toFixed(0) + "°C" : null],
-      ["Thermal headroom", p.cpu.temp_c != null && p.cpu.tjmax_c != null ? (p.cpu.tjmax_c - p.cpu.temp_c).toFixed(0) + "°C to TjMax " + p.cpu.tjmax_c.toFixed(0) + "°C" : null],
+      ["Thermal headroom", p.cpu.temp_c != null && p.cpu.tjmax_c != null ? (p.cpu.tjmax_c - p.cpu.temp_c).toFixed(0) + "°C to TjMax " + p.cpu.tjmax_c.toFixed(0) + "°C" : null, "tjmax"],
       ["AC adapter", d.ac_online == null ? null : (d.ac_online ? "online — running on AC power" : "offline")],
-      ["CPU governor", d.governor],
-      ["Energy performance preference", d.epp],
+      ["CPU governor", d.governor, "governor"],
+      ["Energy performance preference", d.epp, "epp"],
       ["UPS", d.ups ? [d.ups.model || "UPS", d.ups.state, d.ups.percentage != null ? d.ups.percentage + "%" : null].filter(Boolean).join(" · ") : "none detected"],
     ]);
     if (p.power.length) h += p.power.map((b) =>
@@ -472,7 +534,7 @@ const VIEWS = {
     let h = kvTable([
       ["Secure Boot", p.system.secure_boot],
       ["Firewall", p.security.firewall_active == null ? null : (p.security.firewall_active ? "active (" + o(p.security.firewall_service) + ")" : "NONE ACTIVE")],
-      ["Encrypted (LUKS) volumes", String(p.security.luks_volumes)],
+      ["Encrypted (LUKS) volumes", String(p.security.luks_volumes), "luks"],
       ["SSH server running", p.security.sshd_active == null ? null : (p.security.sshd_active ? "yes" : "no")],
     ]);
     h += `<h3>User accounts</h3>` + (p.accounts.length
@@ -511,8 +573,13 @@ const VIEWS = {
         <button type="button" class="pill secondary" data-feedback="feature">Request a Feature</button>
       </div>
       <p class="empty">github.com/garrisonr/linux-system-profiler/issues</p>`;
-    h += `<h3>Themes — every top-20 distro covered</h3>
-      <p>Themes are organized by <em>design language</em>. Distros that share one (say, Debian and Fedora, both GNOME/Adwaita) are covered by the same theme — the note under each says which family it belongs to. Auto matches this machine's distro.</p>
+    h += `<p class="empty">Profile generated ${esc(p.generated_at)}</p>`;
+    return h;
+  },
+  themes(p) {
+    // The gallery's own home since v0.8.5 (it was buried in About). The
+    // sidebar footer's distro dropdown stays as the quick-switch mirror.
+    let h = `<p>Themes are organized by <em>design language</em>. Distros that share one (say, Debian and Fedora, both GNOME/Adwaita) are covered by the same theme — the note under each says which family it belongs to. Auto matches this machine's distro.</p>
       <div class="theme-grid">` +
       DISTROS.map(([name, engine, note], i) => {
         const pv = ENGINE_PREVIEW[engine];
@@ -525,8 +592,8 @@ const VIEWS = {
     return h;
   },
   updates(p) {
-    const group = (title, items, key, danger) =>
-      `<div class="card"><h3>${esc(title)} — ${items.length} available</h3>` +
+    const group = (title, items, key, danger, hintKey) =>
+      `<div class="card"><h3>${esc(title)}${hintKey ? hintBtn(hintKey) : ""} — ${items.length} available</h3>` +
       (items.length
         ? items.slice(0, 60).map((u) => u.note
           ? `<p class="mono">${esc(u.name)} <span class="chip">${esc(u.note)}</span></p>`
@@ -537,8 +604,9 @@ const VIEWS = {
       (p.updates.system_updates[0] || {}).source] || "system-arch";
     let h = `<div class="row"><button class="pill secondary" data-check-updates type="button">Check for updates</button>` +
       `<span class="empty" data-check-status></span></div>`;
-    h += group("System packages", p.updates.system_updates, sysKey, false);
-    h += group("Firmware (LVFS)", p.updates.firmware_updates, "firmware", true);
+    h += group("System packages", p.updates.system_updates, sysKey, false,
+      p.updates.system_updates.some((u) => u.note) ? "phased" : null);
+    h += group("Firmware (LVFS)", p.updates.firmware_updates, "firmware", true, "lvfs");
     h += group("Flatpak", p.updates.flatpak_updates, "flatpak", false);
     if (p.updates.notes.length) h += p.updates.notes.map((n) => `<p class="empty">${esc(n)}</p>`).join("");
     return h;
@@ -597,6 +665,7 @@ function wireDetail() {
 }
 
 function select(id) {
+  closeGloss();
   current = id;
   const label = SECTIONS.find(([s]) => s === id)[1];
   $("detailTitle").textContent = label;
@@ -1040,10 +1109,39 @@ async function watchProgress() {
   } catch (err) { /* no narration; the wait is the same, the profile still lands */ }
 }
 
-async function load() {
+/* The startup loading block (static HTML in index.html) as a template,
+   so Refresh presents the wait EXACTLY like first launch — skeleton +
+   stage narration — instead of v0.8.4's invisible swap behind a fade
+   (Dickles: "a small animation and nothing else; I cannot tell it did
+   anything"). Functionally Refresh always re-collected in full; now it
+   looks like it too. Keep this markup in sync with index.html. */
+function loadingMarkup() {
+  return `<p class="load-stage" role="status"><span class="load-dot" aria-hidden="true"></span><span>Gathering profile — <span id="loadStage">starting…</span></span></p>
+    <div class="skel-card"><span class="skel-bar w40"></span><span class="skel-bar w70"></span><span class="skel-bar w55"></span></div>
+    <div class="skel-card"><span class="skel-bar w40"></span><span class="skel-bar w70"></span></div>
+    <div class="skel-card"><span class="skel-bar w55"></span><span class="skel-bar w70"></span><span class="skel-bar w40"></span></div>
+    <div class="skel-card"><span class="skel-bar w40"></span><span class="skel-bar w55"></span></div>
+    <div class="skel-card"><span class="skel-bar w70"></span><span class="skel-bar w40"></span></div>`;
+}
+
+async function load(isRefresh) {
+  if (profileLoading) return;
   profileLoading = true;
-  P = await invoke("get_profile");
-  profileLoading = false;
+  const btn = $("refreshBtn");
+  if (isRefresh) {
+    closeGloss();
+    $("detailBody").innerHTML = loadingMarkup();
+    $("detailBody").setAttribute("aria-busy", "true");
+    btn.disabled = true;
+    btn.textContent = "Refreshing…";
+  }
+  try {
+    P = await invoke("get_profile");
+  } finally {
+    profileLoading = false;
+    btn.disabled = false;
+    btn.textContent = "Refresh";
+  }
   let pref = "auto";
   try { pref = localStorage.getItem("lsp-theme") || "auto"; } catch (e) {}
   themeControl.set(pref);
@@ -1054,11 +1152,44 @@ async function load() {
   $("detailBody").classList.add("reveal");
   select(current);
   setTimeout(() => $("detailBody").classList.remove("reveal"), 900);
+  if (isRefresh) {
+    // Newness he can SEE: the generated time, announced — the same value
+    // the Overview and About lines render from the fresh profile.
+    const t = new Date(P.generated_at);
+    showToast("Profile refreshed — generated " + (isNaN(t) ? P.generated_at : t.toLocaleTimeString()));
+  }
   await checkDeps();
 }
 
 /* ---------------- wiring ---------------- */
-$("refreshBtn").addEventListener("click", load);
+$("refreshBtn").addEventListener("click", () => load(true));
+
+/* Glossary card: one delegated listener set for every [data-hint]
+   affordance, wherever it's rendered. Click toggles, keyboard focus
+   opens (buttons are natively focusable; Enter/Space click), hover
+   opens on fine pointers, Esc / outside-click closes. */
+let kbdNav = false;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") kbdNav = true;
+  if (e.key === "Escape") closeGloss();
+});
+document.addEventListener("pointerdown", (e) => {
+  kbdNav = false;
+  if (glossAnchor && !e.target.closest("[data-hint]") && !$("glossCard").contains(e.target)) closeGloss();
+});
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-hint]");
+  if (b) { e.preventDefault(); openGloss(b, true); }
+});
+document.addEventListener("focusin", (e) => {
+  const b = e.target.closest("[data-hint]");
+  if (b && kbdNav) openGloss(b, false);
+});
+document.addEventListener("pointerover", (e) => {
+  if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  const b = e.target.closest("[data-hint]");
+  if (b && glossAnchor !== b) openGloss(b, false);
+});
 $("backBtn").addEventListener("click", () => $("app").classList.remove("show-detail"));
 $("logClose").addEventListener("click", () => $("logSheet").close());
 $("logCopy").addEventListener("click", (e) => copyLogOutput(e.currentTarget));
