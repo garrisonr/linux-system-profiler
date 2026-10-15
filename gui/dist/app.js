@@ -431,9 +431,12 @@ const VIEWS = {
       `<option disabled>${esc(d.device)} · ${gb(d.size_bytes)}${d.fs_type ? " · " + esc(d.fs_type) : ""} · ${d.fs_type ? "Not mounted — mount this drive to run a test" : "No filesystem — nothing to test until it's formatted"}</option>`).join("");
     const allOpts = volOpts + unmountedOpts;
     h += `<div class="card gauge-card"><h3>Disk speed test</h3>
-      <p>Sequential write + read on the drive you pick — the test file lands on that drive and is deleted after. Direct I/O where the filesystem allows it; if free space is tight, the test file shrinks and the result says so. Drives that aren't mounted are listed with their state — mount one to test it.</p>
+      <p>Sequential write + read on the drive you pick — the test file lands on that drive and is deleted after. Direct I/O where the filesystem allows it; if free space is tight, the test file shrinks and the result says so. Drives that aren't mounted are listed with their state — mount one to test it. Write and read each get their own meter, like the network test.</p>
       ${allOpts ? `<div class="row"><label>Drive&nbsp; <select class="vol-select" data-disk-volume>${allOpts}</select></label></div>` : ""}
-      <div class="gauge" data-gauge="disk">${gaugeMarkup(2000, "MB/s")}</div>
+      <div class="gauge-pair">
+        <div class="gauge" data-gauge="disk" data-phase="write"><div class="g-label">Write</div>${gaugeMarkup(2000, "MB/s")}</div>
+        <div class="gauge" data-gauge="disk" data-phase="read"><div class="g-label">Read</div>${gaugeMarkup(2000, "MB/s")}</div>
+      </div>
       <div class="row"><button class="pill primary" data-speed="disk" type="button">Run disk test</button>
       <span class="speed-final"></span></div></div>`;
     return h;
@@ -939,6 +942,10 @@ async function runSpeed(btn) {
   btn.textContent = "Running…";
   finalEl.textContent = "";
   gaugeEls.forEach((el) => { gaugeSet(el, 0); labelFor(el).textContent = "Starting…"; });
+  // The disk test writes first: its read meter waits at rest, needle at
+  // zero, until the read phase starts (same patience the network pair
+  // shows its upload meter — one test, one live needle at a time).
+  if (kind === "disk") labelFor(gaugeFor("read")).textContent = "Waiting…";
   // Progress events are decoration — if the event channel is unavailable the
   // test must still run (this exact failure shipped in v0.3.1: no Tauri
   // capability file meant listen() was denied and the test never started).
@@ -956,9 +963,9 @@ async function runSpeed(btn) {
     if (kind === "disk") {
       const sel = card.querySelector("[data-disk-volume]");
       const r = await invoke("run_disk_test", { mount: sel ? sel.value : null });
-      const el = gaugeEls[0];
-      gaugeSet(el, r.read_mbps);
-      labelFor(el).textContent = "Done";
+      gaugeSet(gaugeFor("write"), r.write_mbps);
+      gaugeSet(gaugeFor("read"), r.read_mbps);
+      gaugeEls.forEach((el) => { labelFor(el).textContent = "Done"; });
       finalEl.innerHTML = `<strong>Write ${r.write_mbps.toFixed(0)} MB/s · Read ${r.read_mbps.toFixed(0)} MB/s</strong>` +
         `<br>${esc(r.device || "drive")} at ${esc(r.path)} · ${r.size_mb} MB test file` +
         (r.note ? `<br>${esc(r.note)}` : "");
