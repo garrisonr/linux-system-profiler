@@ -17,6 +17,25 @@ use tauri::{Emitter, State};
 #[derive(Default)]
 struct ProfileCache(Mutex<Option<Profile>>);
 
+/// Rendered Copy & Share output, keyed by report kind. Rendering a report
+/// (serialize + sanitize + format) was the v0.4 gaps memo's Copy & Share
+/// lag: it ran synchronously on every click. Now it renders once, off the
+/// UI thread, and repeat clicks reuse the text. Cleared whenever the
+/// cached profile changes.
+#[derive(Default)]
+struct RenderCache(std::sync::Arc<Mutex<std::collections::HashMap<String, String>>>);
+
+fn render_cached(rc: &std::sync::Arc<Mutex<std::collections::HashMap<String, String>>>, p: &Profile, kind: &str) -> String {
+    if let Some(t) = rc.lock().unwrap().get(kind) { return t.clone(); }
+    let t = render_report(p, kind);
+    rc.lock().unwrap().insert(kind.to_string(), t.clone());
+    t
+}
+
+fn clear_render_cache(renders: &RenderCache) {
+    renders.0.lock().unwrap().clear();
+}
+
 fn cached_or_collect(cache: &State<ProfileCache>) -> Profile {
     if let Some(p) = cache.0.lock().unwrap().clone() { return p; }
     let p = collect_profile(true, None, false);
@@ -25,7 +44,7 @@ fn cached_or_collect(cache: &State<ProfileCache>) -> Profile {
 }
 
 #[tauri::command]
-async fn get_profile(app: tauri::AppHandle, cache: State<'_, ProfileCache>) -> Result<Profile, String> {
+async fn get_profile(app: tauri::AppHandle, cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>) -> Result<Profile, String> {
     // v0.6: collection probes dozens of tools and can take seconds on slow
     // buses — run it off the IPC thread so the window never freezes on load.
     // (Tauri requires async commands with reference inputs to return Result.)
@@ -40,6 +59,7 @@ async fn get_profile(app: tauri::AppHandle, cache: State<'_, ProfileCache>) -> R
     })
         .await.map_err(|e| e.to_string())?;
     *cache.0.lock().unwrap() = Some(p.clone());
+    clear_render_cache(&renders);
     Ok(p)
 }
 
@@ -64,8 +84,21 @@ struct InstallOutcome {
 
 /// One-click install of missing probe tools. pkexec shows the system's own
 /// password prompt — the app never sees or handles the user's password.
+/// Runs on a blocking thread: the pkexec prompt can sit open for as long as
+/// the user takes, and v0.8.0 ran this synchronously on the IPC thread,
+/// freezing the window behind the prompt (Gemini audit 2026-10-14).
 #[tauri::command]
-fn install_deps() -> InstallOutcome {
+async fn install_deps() -> InstallOutcome {
+    tauri::async_runtime::spawn_blocking(install_deps_blocking).await
+        .unwrap_or_else(|e| InstallOutcome {
+            ok: false, kind: "failed".into(),
+            message: "The install couldn't be started.".into(),
+            detail: format!("install task failed: {e}"),
+            packages: vec![], manual_command: None,
+        })
+}
+
+fn install_deps_blocking() -> InstallOutcome {
     let st = deps::dep_status();
     let manual = deps::manual_command(&st);
     if st.missing.is_empty() {
@@ -133,33 +166,56 @@ fn clipboard_set(text: &str) -> bool {
         .is_ok()
 }
 
-/// Copy & Share — copy action. Uses the CACHED profile (instant); kinds:
-/// "sanitized" (Markdown, forum-safe), "full-md", "json".
+/// Copy & Share — copy action. Uses the CACHED profile; the report renders
+/// OFF the UI thread and is cached per kind, so repeat clicks are instant
+/// (the v0.4 gaps memo's synchronous re-render lag, still open in v0.8.0 —
+/// Gemini audit 2026-10-14). Kinds: "sanitized" (Markdown, forum-safe),
+/// "full-md", "json".
 #[tauri::command]
-fn share_copy(cache: State<ProfileCache>, kind: String) -> CopyResult {
+async fn share_copy(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>, kind: String) -> CopyResult {
     let p = cached_or_collect(&cache);
-    let text = render_report(&p, &kind);
-    let chars = text.chars().count();
-    let copied = clipboard_set(&text);
-    CopyResult { copied, text, chars }
+    let rc = renders.0.clone();
+    let kind2 = kind.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let text = render_cached(&rc, &p, &kind2);
+        let chars = text.chars().count();
+        let copied = clipboard_set(&text);
+        CopyResult { copied, text, chars }
+    }).await;
+    match joined {
+        Ok(r) => r,
+        Err(_) => {
+            let p = cached_or_collect(&cache);
+            let text = render_report(&p, &kind);
+            let chars = text.chars().count();
+            CopyResult { copied: clipboard_set(&text), text, chars }
+        }
+    }
 }
 
 /// Backward-compatible name used by the v0.3 frontend.
 #[tauri::command]
-fn copy_forum(cache: State<ProfileCache>) -> CopyResult {
-    share_copy(cache, "sanitized".into())
+async fn copy_forum(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>) -> CopyResult {
+    share_copy(cache, renders, "sanitized".into()).await
 }
 
 /// Copy & Share — save action. Native save dialog (rfd/GTK); writes
 /// atomically via the core helper. Returns the saved path, or None if the
 /// user cancelled the dialog.
 #[tauri::command]
-async fn share_save(cache: State<'_, ProfileCache>, kind: String) -> Result<Option<String>, String> {
+async fn share_save(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>, kind: String) -> Result<Option<String>, String> {
     let p = cached_or_collect(&cache);
-    let (text, filename, filter_name, ext) = match kind.as_str() {
-        "full-md" => (render_report(&p, "full-md"), "system-profile.md", "Markdown", "md"),
-        "json" => (render_report(&p, "json"), "system-profile.json", "JSON", "json"),
-        _ => (render_report(&p, "sanitized"), "system-profile-forum.md", "Markdown", "md"),
+    // Render off the UI thread (cached per kind) — v0.8.0 rendered
+    // synchronously here on every click, the Copy & Share lag.
+    let rc = renders.0.clone();
+    let (text, filename, filter_name, ext) = {
+        tauri::async_runtime::spawn_blocking(move || {
+            match kind.as_str() {
+                "full-md" => (render_cached(&rc, &p, "full-md"), "system-profile.md", "Markdown", "md"),
+                "json" => (render_cached(&rc, &p, "json"), "system-profile.json", "JSON", "json"),
+                _ => (render_cached(&rc, &p, "sanitized"), "system-profile-forum.md", "Markdown", "md"),
+            }
+        }).await.map_err(|e| e.to_string())?
     };
     let picked = tauri::async_runtime::spawn_blocking(move || {
         rfd::FileDialog::new()
@@ -239,8 +295,16 @@ struct ElevatedDmi {
 /// prompt — the app never handles credentials). Fills the two things a
 /// regular user can't read: memory-module detail and the system serial.
 /// The user explicitly clicks for this; nothing elevates silently.
+/// Runs on a blocking thread — the polkit prompt can wait on the user
+/// indefinitely, and on the IPC thread it froze the whole window
+/// (Gemini audit 2026-10-14).
 #[tauri::command]
-fn elevated_dmi() -> Result<ElevatedDmi, String> {
+async fn elevated_dmi() -> Result<ElevatedDmi, String> {
+    tauri::async_runtime::spawn_blocking(elevated_dmi_blocking).await
+        .map_err(|e| format!("elevation task failed: {e}"))?
+}
+
+fn elevated_dmi_blocking() -> Result<ElevatedDmi, String> {
     let out = Command::new("pkexec").args(["dmidecode"]).output()
         .map_err(|e| format!("failed to launch pkexec: {e}"))?;
     if !out.status.success() {
@@ -278,21 +342,14 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
     use tauri::Emitter;
-    // v0.6: distro-aware apply. pacman keeps --noconfirm deliberately: a
-    // GUI apply has no TTY, so an interactive pacman would hang on prompts
-    // it can never receive; --noconfirm is what every GUI updater (Pamac,
-    // Discover) does under the hood, and the streamed log shows exactly
-    // what was decided. apt/dnf paths follow each tool's non-interactive
-    // conventions; they are exercised on their own distros' test passes.
-    let (prog, args): (&str, Vec<&str>) = match group {
-        "system-arch" => ("pkexec", vec!["pacman", "-Syu", "--noconfirm"]),
-        "system-dnf" => ("pkexec", vec!["dnf", "upgrade", "-y"]),
-        "system-apt" => ("pkexec", vec!["sh", "-c",
-            "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y"]),
-        "firmware" => ("pkexec", vec!["fwupdmgr", "update", "-y"]),
-        "flatpak" => ("flatpak", vec!["update", "-y"]),
-        _ => return Err(format!("unknown update group: {group}")),
-    };
+    // v0.6: distro-aware apply; the command table lives in the core
+    // (updates::apply_command) where tests pin the safety contract — no
+    // distro path may ever dist-upgrade/full-upgrade. v0.8.0's apt arm ran
+    // `apt-get dist-upgrade -y`, which can REMOVE packages; it now runs a
+    // plain `apt-get upgrade -y`, and the index refresh it used to smuggle
+    // in moved to the explicit Check (refresh_update_check).
+    let (prog, args) = linux_system_profiler::updates::apply_command(group)
+        .ok_or_else(|| format!("unknown update group: {group}"))?;
     let mut child = Command::new(prog).args(&args)
         .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
         .map_err(|e| format!("failed to launch {prog}: {e}"))?;
@@ -322,13 +379,46 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
     if status.success() { Ok(full) } else { Err(full) }
 }
 
+/// Explicit Check from the Updates view. On apt, a check is only as fresh
+/// as the local package indexes — v0.8.0 read them stale and hid the
+/// refresh inside Apply. Now an explicit Check performs the elevated
+/// metadata refresh first (installs nothing), then re-collects and swaps
+/// the fresh updates into the cached profile so every view agrees.
+#[tauri::command]
+async fn refresh_update_check(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>) -> Result<linux_system_profiler::model::UpdatesInfo, String> {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let mut refreshed = false;
+        if let Some((elevate, args)) = linux_system_profiler::updates::metadata_refresh_command() {
+            let out = Command::new(&elevate).args(&args).output()
+                .map_err(|e| format!("couldn't start the package-list refresh: {e}"))?;
+            if !out.status.success() {
+                return Err("The package-list refresh didn't complete — results may be out of date. (The password prompt may have been dismissed.)".to_string());
+            }
+            refreshed = true;
+        }
+        let mut info = linux_system_profiler::updates::collect_updates();
+        if refreshed {
+            info.notes.insert(0, "Package lists were refreshed just now — these results are current.".into());
+        }
+        Ok(info)
+    }).await.map_err(|e| e.to_string())?;
+    let info = joined?;
+    if let Some(p) = cache.0.lock().unwrap().as_mut() {
+        p.updates = info.clone();
+        clear_render_cache(&renders);
+    }
+    Ok(info)
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(ProfileCache::default())
+        .manage(RenderCache::default())
         .invoke_handler(tauri::generate_handler![
             get_profile, get_dep_status, install_deps, copy_forum,
             share_copy, share_save, share_email, copy_text, open_url,
-            run_disk_test, run_network_test, apply_updates, elevated_dmi
+            run_disk_test, run_network_test, apply_updates, elevated_dmi,
+            refresh_update_check
         ])
         .run(tauri::generate_context!())
         .expect("error while running Linux System Profiler");

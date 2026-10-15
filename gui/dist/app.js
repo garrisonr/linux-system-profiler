@@ -530,7 +530,9 @@ const VIEWS = {
         : `<p>Up to date.</p>`) + `</div>`;
     const sysKey = { pacman: "system-arch", apt: "system-apt", dnf: "system-dnf" }[
       (p.updates.system_updates[0] || {}).source] || "system-arch";
-    let h = group("System packages", p.updates.system_updates, sysKey, false);
+    let h = `<div class="row"><button class="pill secondary" data-check-updates type="button">Check for updates</button>` +
+      `<span class="empty" data-check-status></span></div>`;
+    h += group("System packages", p.updates.system_updates, sysKey, false);
     h += group("Firmware (LVFS)", p.updates.firmware_updates, "firmware", true);
     h += group("Flatpak", p.updates.flatpak_updates, "flatpak", false);
     if (p.updates.notes.length) h += p.updates.notes.map((n) => `<p class="empty">${esc(n)}</p>`).join("");
@@ -550,6 +552,8 @@ function renderNav() {
 }
 
 function wireDetail() {
+  document.querySelectorAll("[data-check-updates]").forEach((b) =>
+    b.addEventListener("click", () => checkUpdates(b)));
   document.querySelectorAll("[data-apply]").forEach((b) =>
     b.addEventListener("click", () => applyGroup(b.dataset.apply)));
   document.querySelectorAll("[data-speed]").forEach((b) =>
@@ -714,6 +718,29 @@ function askConfirm(title, body, okLabel, danger) {
   });
 }
 
+/* Explicit Check: on apt the backend first refreshes the package lists
+   (elevated, installs nothing) so results are current, then re-collects.
+   Older backends without the command just re-run a plain load. */
+async function checkUpdates(btn) {
+  const status = btn.parentElement.querySelector("[data-check-status]");
+  btn.disabled = true;
+  if (status) status.textContent = "Checking… on some systems this asks for your password to refresh the package lists.";
+  try {
+    P.updates = await invoke("refresh_update_check");
+    showToast("Update check complete");
+    renderNav();
+    select(current);
+  } catch (e) {
+    if (String(e).includes("unknown command") || String(e).includes("not found")) {
+      await load();
+      return;
+    }
+    showToast(String(e));
+    btn.disabled = false;
+    if (status) status.textContent = "";
+  }
+}
+
 let applying = false;
 async function applyGroup(group) {
   const names = { "system-arch": "system packages", "system-apt": "system packages",
@@ -874,7 +901,10 @@ async function checkDeps() {
     if (st.missing.length) {
       $("depBannerText").textContent =
         `Missing probe tools: ${st.missing.join(", ")} — ${st.missing_features.join("; ")}. ` +
-        `Sections would come back empty without them.`;
+        `Sections would come back empty without them.` +
+        (st.not_needed && st.not_needed.length
+          ? ` Not needed on this system: ${st.not_needed.join("; ")} — this system's own tools cover those jobs.`
+          : ``);
       setDepActions([{ label: "Install missing tools", primary: true, run: runDepInstall }]);
       $("depBanner").classList.remove("hidden");
     } else {

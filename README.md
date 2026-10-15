@@ -3,8 +3,12 @@
 Apple's System Information, for Linux — plus the thing Apple never gave it:
 a single place to see and apply **driver, firmware, and software updates**.
 
-**Status: v0.8.0 — close-out release.** CLI core + Tauri GUI shipped and
-dogfooded on real hardware; feature-complete, maintenance-only from here.
+**Status: v0.8.1.** CLI core + Tauri GUI shipped and dogfooded on real
+hardware; under active development. v0.8.1 is the audit fix pass (external
+Gemini audit of v0.8.0): the apt update Apply no longer runs a
+dist-upgrade, an explicit Check refreshes package metadata first, package
+inventory works on dpkg/rpm systems, and Copy & Share renders off the UI
+thread.
 Apple design language, adaptive desktop / laptop / tablet / phone layouts
 (see `gui/` + `DESIGN.md`). Nineteen theme engines (Auto matches your
 system), Report a Bug / Request a Feature in the About pane.

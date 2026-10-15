@@ -67,6 +67,60 @@ pub fn mask_home_paths(s: &str) -> String {
     out
 }
 
+/// True when the 36 bytes at `i` form a canonical UUID
+/// (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, hex digits, either case).
+fn is_uuid_at(b: &[u8], i: usize) -> bool {
+    if i + 36 > b.len() { return false; }
+    b[i + 8] == b'-' && b[i + 13] == b'-' && b[i + 18] == b'-' && b[i + 23] == b'-'
+        && (0..36).all(|j| matches!(j, 8 | 13 | 18 | 23) || b[i + j].is_ascii_hexdigit())
+}
+
+/// Replace every canonical UUID appearing in a string — standalone OR
+/// embedded, e.g. `/dev/disk/by-uuid/<uuid>` paths and `luks-<uuid>`
+/// volume names — with its stable hash (Gemini audit 2026-10-14: UUIDs and
+/// product/machine identifiers rode through exports unscrubbed).
+pub fn mask_uuids_in(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0; let mut last = 0;
+    while i + 36 <= b.len() {
+        // Bounded by non-hex on both sides (a longer hex run isn't a UUID;
+        // a '-' neighbour is fine — `luks-<uuid>` names must still mask).
+        let bounded = (i == 0 || !b[i - 1].is_ascii_hexdigit())
+            && (i + 36 == b.len() || !b[i + 36].is_ascii_hexdigit());
+        if bounded && is_uuid_at(b, i) {
+            out.push_str(&s[last..i]);
+            out.push_str(&hash_id("uuid", &s[i..i + 36]));
+            i += 36; last = i;
+        } else { i += 1; }
+    }
+    if last == 0 { return s.to_string(); }
+    out.push_str(&s[last..]);
+    out
+}
+
+/// If the whole string is a MAC address (6 or 8 hex byte pairs, ':' or '-'
+/// separated), return it masked; otherwise None. Key-independent: bridge
+/// and permanent hardware addresses hide under many key names.
+fn mask_mac_value(s: &str) -> Option<String> {
+    let sep = if s.contains(':') { ':' } else if s.contains('-') { '-' } else { return None };
+    let parts: Vec<&str> = s.split(sep).collect();
+    if (parts.len() == 6 || parts.len() == 8)
+        && parts.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit())) {
+        let keep = &parts[..3];
+        let stars = vec!["**"; parts.len() - 3];
+        Some(format!("{}:{}", keep.join(":"), stars.join(":")))
+    } else { None }
+}
+
+/// Identifier scrubbing for any string value, whatever key it sits under:
+/// embedded UUIDs hashed, a whole-string MAC masked.
+fn scrub_string(s: &str) -> String {
+    let s = mask_uuids_in(s);
+    if let Some(m) = mask_mac_value(&s) { return m; }
+    s
+}
+
 pub fn sanitize_json(v: &mut serde_json::Value) {
     match v {
         serde_json::Value::Object(map) => {
@@ -90,7 +144,8 @@ pub fn sanitize_json(v: &mut serde_json::Value) {
                     if let Some(s) = val.as_str() { if s.contains(':') { *val = serde_json::Value::String(mask_mac(s)); } }
                 } else if key == "mac" {
                     if let Some(s) = val.as_str() { *val = serde_json::Value::String(mask_mac(s)); }
-                } else if key.contains("serial") || key == "hostname" {
+                } else if key.contains("serial") || key == "hostname"
+                    || key.contains("uuid") || key.contains("machine_id") || key.contains("machineid") {
                     if let Some(s) = val.as_str() {
                         if !s.is_empty() { *val = serde_json::Value::String(hash_id(&key, s)); }
                     }
@@ -101,15 +156,22 @@ pub fn sanitize_json(v: &mut serde_json::Value) {
                         }
                     }
                 }
-                // Home paths can ride along in any string field (mounts, volumes…)
+                // Home paths can ride along in any string field (mounts, volumes…),
+                // and so can UUIDs and MACs under keys nobody anticipated.
                 if let serde_json::Value::String(s) = val {
-                    let m = mask_home_paths(s);
+                    let m = scrub_string(&mask_home_paths(s));
                     if m != *s { *val = serde_json::Value::String(m); }
                 }
                 sanitize_json(val);
             }
         }
-        serde_json::Value::Array(arr) => for item in arr.iter_mut() { sanitize_json(item); },
+        serde_json::Value::Array(arr) => for item in arr.iter_mut() {
+            if let serde_json::Value::String(s) = item {
+                let m = scrub_string(s);
+                if m != *s { *item = serde_json::Value::String(m); }
+            }
+            sanitize_json(item);
+        },
         _ => {}
     }
 }
@@ -145,6 +207,23 @@ mod tests {
         let mut v = serde_json::json!({"volumes":[{"mount":"/home/dickles"}]});
         sanitize_json(&mut v);
         assert!(!v.to_string().contains("dickles"));
+    }
+    #[test] fn sanitize_redacts_uuids_and_machine_ids() {
+        let mut v = serde_json::json!({
+            "system": {"product_uuid": "123e4567-e89b-12d3-a456-426614174000", "machine_id": "9f8e7d6c5b4a39281706f5e4d3c2b1a0"},
+            "storage": [{"device": "/dev/disk/by-uuid/123e4567-e89b-12d3-a456-426614174999", "name": "luks-123e4567-e89b-12d3-a456-426614174888"}],
+            "network": [{"name": "br0", "permanent_hw": "AA:BB:CC:11:22:33"}],
+            "memory": [{"part_number": "LD4AS016G-3200ST", "type": "DDR4"}]
+        });
+        sanitize_json(&mut v);
+        let s = v.to_string();
+        assert!(!s.contains("123e4567"), "{s}");
+        assert!(!s.contains("9f8e7d6c5b4a39281706f5e4d3c2b1a0"), "{s}");
+        assert!(!s.contains("11:22:33"), "{s}");
+        // Non-identifier strings survive untouched.
+        assert!(s.contains("LD4AS016G-3200ST"), "{s}");
+        assert!(s.contains("DDR4"), "{s}");
+        assert!(s.contains("/dev/disk/by-uuid/sha256:"), "{s}");
     }
     #[test] fn sanitize_redacts_serial_and_hostname() {
         let mut v = serde_json::json!({"hostname":"mybox","storage":[{"serial":"WD-SECRET123","model":"_NVMe"}]});

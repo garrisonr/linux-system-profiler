@@ -34,6 +34,13 @@ pub struct DepStatus {
     pub missing_features: Vec<String>,
     pub package_manager: Option<String>,
     pub packages_to_install: Vec<String>,
+    /// Features whose helper tool has no package on this distro because the
+    /// distro's own tooling covers the job (e.g. checkupdates is Arch-only —
+    /// apt/dnf check updates natively). Reported honestly as "not needed
+    /// here" instead of the old behavior: an empty package string and
+    /// silence (Gemini audit 2026-10-14).
+    #[serde(default)]
+    pub not_needed: Vec<String>,
 }
 
 pub fn dep_status() -> DepStatus {
@@ -52,6 +59,10 @@ pub fn dep_status() -> DepStatus {
                 if !st.packages_to_install.contains(&pkg.to_string()) {
                     st.packages_to_install.push(pkg.to_string());
                 }
+            } else if pm.is_some() {
+                // Known distro, empty cell: the tool isn't missing, it's
+                // unnecessary here — say so instead of dropping it silently.
+                st.not_needed.push(format!("{} ({})", t.feature, t.binary));
             }
         }
     }
@@ -75,8 +86,13 @@ pub fn install_command(st: &DepStatus) -> Option<(String, Vec<String>)> {
             a.extend(st.packages_to_install.iter().cloned()); a
         }
         Some("apt") => {
-            let mut a = vec!["apt-get".into(), "install".into(), "-y".into()];
-            a.extend(st.packages_to_install.iter().cloned()); a
+            // Chain a metadata refresh first: on stale package lists a bare
+            // `apt-get install` dies with "Unable to locate package"
+            // (Gemini audit 2026-10-14). Runs under `sh -c` beneath the
+            // elevation tool, same shape as the updates apply path.
+            let pkgs = st.packages_to_install.join(" ");
+            vec!["sh".into(), "-c".into(),
+                 format!("DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}")]
         }
         Some("dnf") => {
             let mut a = vec!["dnf".into(), "install".into(), "-y".into()];
@@ -141,7 +157,7 @@ pub fn manual_command(st: &DepStatus) -> Option<String> {
     let pkgs = st.packages_to_install.join(" ");
     match st.package_manager.as_deref() {
         Some("pacman") => Some(format!("sudo pacman -S --needed {pkgs}")),
-        Some("apt") => Some(format!("sudo apt-get install -y {pkgs}")),
+        Some("apt") => Some(format!("sudo apt-get update && sudo apt-get install -y {pkgs}")),
         Some("dnf") => Some(format!("sudo dnf install -y {pkgs}")),
         _ => None,
     }
@@ -216,5 +232,49 @@ pub fn install_deps(st: &DepStatus) -> Result<String, InstallError> {
                       the tools are installed.".into(),
             detail: format!("Plan was: `{plan}`\n{}", tail_lines(&stderr, 4, 400)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn st(pm: &str, pkgs: &[&str]) -> DepStatus {
+        DepStatus {
+            package_manager: Some(pm.to_string()),
+            packages_to_install: pkgs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apt_install_refreshes_metadata_first() {
+        // Regression pin (Gemini audit 2026-10-14): a bare `apt-get install`
+        // fails with "Unable to locate package" on stale lists. The update
+        // must be chained BEFORE the install.
+        let (_, args) = install_command(&st("apt", &["usbutils", "fwupd"])).unwrap();
+        let line = args.join(" ");
+        let upd = line.find("apt-get update").expect("apt-get update missing");
+        let inst = line.find("apt-get install -y usbutils fwupd").expect("install missing");
+        assert!(upd < inst, "{line}");
+        assert!(!line.contains("dist-upgrade"), "{line}");
+    }
+
+    #[test]
+    fn pacman_and_dnf_installs_stay_targeted() {
+        let (_, args) = install_command(&st("pacman", &["usbutils"])).unwrap();
+        let line = args.join(" ");
+        assert!(line.contains("pacman -S --needed --noconfirm usbutils"), "{line}");
+        assert!(!line.contains("-Syu"), "dep install must never upgrade the system: {line}");
+        let (_, args) = install_command(&st("dnf", &["usbutils"])).unwrap();
+        assert_eq!(args.join(" "), "dnf install -y usbutils");
+    }
+
+    #[test]
+    fn manual_command_matches_automated_shape() {
+        let m = manual_command(&st("apt", &["usbutils"])).unwrap();
+        assert!(m.contains("apt-get update") && m.contains("apt-get install -y usbutils"), "{m}");
+        assert!(manual_command(&st("apt", &[])).is_none());
+        assert!(install_command(&st("apt", &[])).is_none());
     }
 }

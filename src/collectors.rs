@@ -602,9 +602,54 @@ pub fn collect_docker_status() -> Option<DockerStatus> {
     } }
     let socket = std::path::Path::new("/var/run/docker.sock").exists();
     let bridge = std::path::Path::new("/sys/class/net/docker0").exists();
+    // Rootless Docker keeps its socket under $XDG_RUNTIME_DIR, and a set
+    // DOCKER_HOST means the daemon lives somewhere non-default — both make
+    // "not-running" a guess we can't stand behind, so they join the
+    // "inaccessible" (can't tell) side of the ladder.
+    let rootless_socket = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|d| std::path::Path::new(&d).join("docker.sock").exists()).unwrap_or(false);
+    let docker_host = std::env::var_os("DOCKER_HOST").map(|v| !v.is_empty()).unwrap_or(false);
     Some(DockerStatus {
-        state: if socket || bridge { "inaccessible".into() } else { "not-running".into() },
+        state: docker_unreachable_state(socket, bridge, rootless_socket, docker_host).into(),
         containers: 0, containers_running: 0, images: 0 })
+}
+
+/// When `docker info` failed: any sign of a daemon we simply cannot reach
+/// (system socket, bridge interface, rootless socket, custom DOCKER_HOST)
+/// means "inaccessible"; only a total absence of evidence earns
+/// "not-running".
+fn docker_unreachable_state(socket: bool, bridge: bool, rootless_socket: bool, docker_host: bool) -> &'static str {
+    if socket || bridge || rootless_socket || docker_host { "inaccessible" } else { "not-running" }
+}
+
+/// Parse "name version" lines (pacman -Qe, dpkg-query -W, rpm -qa --qf all
+/// produce this shape) into NamedVersions.
+fn parse_pkg_lines(out: &str) -> Vec<NamedVersion> {
+    out.lines().filter_map(|l| {
+        let mut it = l.splitn(2, ' ');
+        let name = it.next()?.trim().to_string();
+        if name.is_empty() { return None; }
+        Some(NamedVersion { name, version: it.next().unwrap_or("").trim().to_string() })
+    }).collect()
+}
+
+/// Last "[ALPM] upgraded" timestamp from pacman.log contents.
+fn parse_pacman_log_last_upgrade(log: &str) -> Option<String> {
+    log.lines().rev().find(|l| l.contains("[ALPM] upgraded"))
+        .map(|l| l.trim_start_matches('[').split(']').next().unwrap_or("").to_string())
+}
+
+/// Last upgrade timestamp from dpkg.log contents. Lines look like
+/// `2026-10-01 12:34:56 upgrade pkg:amd64 1.0 1.1` — the leading
+/// date + time fields are the timestamp.
+fn parse_dpkg_log_last_upgrade(log: &str) -> Option<String> {
+    log.lines().rev().find(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 3 && f[2] == "upgrade"
+    }).map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        format!("{} {}", f[0], f[1])
+    })
 }
 
 pub fn collect_software() -> SoftwareInfo {
@@ -614,16 +659,45 @@ pub fn collect_software() -> SoftwareInfo {
         } else if which("dpkg-query") { (cmd("dpkg-query", &["-l"]).map(|o| o.lines().count()), Some("dpkg".to_string()))
         } else if which("rpm") { (cmd("rpm", &["-qa"]).map(|o| o.lines().count()), Some("rpm".to_string()))
         } else { (None, None) };
+    // Explicit (user-chosen) packages per distro family — v0.8.0 only did
+    // pacman, so apt/rpm users got an empty card on the profiler's home
+    // turf (Gemini audit 2026-10-14). Debian's analog of `pacman -Qe` is
+    // apt-mark's manual set joined with dpkg's version table; Fedora's is
+    // dnf's userinstalled set, falling back to the full rpm list.
     let explicit_packages = if which("pacman") {
-        cmd("pacman", &["-Qe"]).map(|o| o.lines().take(600).filter_map(|l| {
-            let mut it = l.splitn(2, ' ');
-            Some(NamedVersion { name: it.next()?.to_string(), version: it.next().unwrap_or("").to_string() })
-        }).collect()).unwrap_or_default()
+        cmd("pacman", &["-Qe"]).map(|o| parse_pkg_lines(&o).into_iter().take(600).collect()).unwrap_or_default()
+    } else if which("dpkg-query") {
+        let manual: std::collections::HashSet<String> = cmd("apt-mark", &["showmanual"])
+            .map(|o| o.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
+        cmd("dpkg-query", &["-W", "-f=${Package} ${Version}\n"])
+            .map(|o| parse_pkg_lines(&o).into_iter()
+                .filter(|p| manual.is_empty() || manual.contains(&p.name))
+                .take(600).collect())
+            .unwrap_or_default()
+    } else if which("rpm") {
+        let userinstalled = if which("dnf") {
+            cmd("timeout", &["10", "dnf", "repoquery", "--userinstalled", "--qf", "%{name} %{version}-%{release}"])
+                .filter(|o| !o.trim().is_empty())
+        } else { None };
+        userinstalled.or_else(|| cmd("rpm", &["-qa", "--qf", "%{name} %{version}-%{release}\n"]))
+            .map(|o| parse_pkg_lines(&o).into_iter().take(600).collect())
+            .unwrap_or_default()
     } else { Vec::new() };
-    let last_upgrade = fs::read_to_string("/var/log/pacman.log").ok().and_then(|log| {
-        log.lines().rev().find(|l| l.contains("[ALPM] upgraded"))
-            .map(|l| l.trim_start_matches('[').split(']').next().unwrap_or("").to_string())
-    });
+    let last_upgrade = fs::read_to_string("/var/log/pacman.log").ok()
+        .and_then(|log| parse_pacman_log_last_upgrade(&log))
+        .or_else(|| fs::read_to_string("/var/log/dpkg.log").ok()
+            .and_then(|log| parse_dpkg_log_last_upgrade(&log)))
+        .or_else(|| {
+            // rpm: `rpm -qa --last` sorts newest-first; the first line's
+            // trailing date is the most recent package change.
+            cmd("rpm", &["-qa", "--last"]).and_then(|o| {
+                let line = o.lines().next()?.trim().to_string();
+                let mut it = line.splitn(2, char::is_whitespace);
+                it.next()?;
+                it.next().map(|d| d.trim().to_string()).filter(|d| !d.is_empty())
+            })
+        });
     let snaps = if which("snap") {
         cmd("timeout", &["5", "snap", "list"]).map(|o| o.lines().skip(1).filter_map(|l| {
             let t: Vec<&str> = l.split_whitespace().collect();
@@ -810,6 +884,42 @@ pub fn collect_security() -> SecurityInfo {
 #[cfg(test)]
 mod parser_tests {
     use super::*;
+
+    #[test]
+    fn pkg_lines_parse_all_distro_shapes() {
+        let dpkg = "bash 5.1-6ubuntu1\ncoreutils 9.4-3ubuntu6\nlonely\n";
+        let v = parse_pkg_lines(dpkg);
+        assert_eq!(v.len(), 3);
+        assert_eq!((v[0].name.as_str(), v[0].version.as_str()), ("bash", "5.1-6ubuntu1"));
+        assert_eq!(v[2].version, "");
+        let rpm = "bash 5.1.8-6.el9\n";
+        assert_eq!(parse_pkg_lines(rpm)[0].version, "5.1.8-6.el9");
+    }
+
+    #[test]
+    fn dpkg_log_last_upgrade_takes_newest_upgrade_line() {
+        let log = "2026-09-01 10:00:00 startup archives install\n\
+                   2026-09-02 11:00:00 upgrade bash:amd64 5.1 5.2\n\
+                   2026-09-03 09:00:00 install curl:amd64 <none> 8.0\n\
+                   2026-09-04 08:30:00 upgrade curl:amd64 8.0 8.1\n";
+        assert_eq!(parse_dpkg_log_last_upgrade(log).as_deref(), Some("2026-09-04 08:30:00"));
+        assert_eq!(parse_dpkg_log_last_upgrade("2026-09-01 10:00:00 startup archives install\n"), None);
+    }
+
+    #[test]
+    fn pacman_log_last_upgrade_still_parses() {
+        let log = "[2026-09-01T10:00:00+0000] [ALPM] upgraded bash (5.1 -> 5.2)\n[2026-09-02T10:00:00+0000] [ALPM] installed curl (8.0)\n";
+        assert_eq!(parse_pacman_log_last_upgrade(log).as_deref(), Some("2026-09-01T10:00:00+0000"));
+    }
+
+    #[test]
+    fn docker_unreachable_state_ladder() {
+        assert_eq!(docker_unreachable_state(false, false, false, false), "not-running");
+        assert_eq!(docker_unreachable_state(true, false, false, false), "inaccessible");
+        assert_eq!(docker_unreachable_state(false, true, false, false), "inaccessible");
+        assert_eq!(docker_unreachable_state(false, false, true, false), "inaccessible"); // rootless socket
+        assert_eq!(docker_unreachable_state(false, false, false, true), "inaccessible");  // DOCKER_HOST set
+    }
 
     #[test]
     fn dmidecode_memory_parses_populated_slot_only() {
