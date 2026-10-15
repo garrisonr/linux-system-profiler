@@ -161,6 +161,64 @@ fn render_report(p: &Profile, kind: &str) -> String {
 struct CopyResult { copied: bool, text: String, chars: usize }
 
 fn clipboard_set(text: &str) -> bool {
+    use std::io::Write;
+    use std::process::Stdio;
+    // Native clipboard tools first — the house-proven path. v0.8.2's
+    // "Copy output" button (and, silently, Copy & Share and every other
+    // copy_text caller) went through arboard's in-process Wayland
+    // backend, which fails on this stack: set_text returned Err and the
+    // user got "Couldn't copy". wl-copy instead daemonizes and holds
+    // the selection after we exit, so the copy survives dialog close
+    // and app quit. LD_LIBRARY_PATH is scrubbed for the child (the
+    // Fable AppImage lesson: a leaked library path breaks system tools).
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if let Ok(mut child) = Command::new("wl-copy")
+            .env_remove("LD_LIBRARY_PATH")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            let fed = match child.stdin.take() {
+                Some(mut sin) => {
+                    let w = sin.write_all(text.as_bytes());
+                    drop(sin);
+                    w.is_ok()
+                }
+                None => false,
+            };
+            // wl-copy's parent exits once its daemon child owns the
+            // selection; a non-zero exit means the hand-off failed.
+            if fed && child.wait().map(|s| s.success()).unwrap_or(false) {
+                return true;
+            }
+        }
+    }
+    if std::env::var_os("DISPLAY").is_some() {
+        if let Ok(mut child) = Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .env_remove("LD_LIBRARY_PATH")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            let fed = match child.stdin.take() {
+                Some(mut sin) => {
+                    let w = sin.write_all(text.as_bytes());
+                    drop(sin);
+                    w.is_ok()
+                }
+                None => false,
+            };
+            // xclip's parent exits once its background holder owns the
+            // selection; reap it rather than leaving a zombie per copy.
+            if fed && child.wait().map(|s| s.success()).unwrap_or(false) {
+                return true;
+            }
+        }
+    }
+    // Last resort (non-Wayland/non-X environments): the in-process API.
     arboard::Clipboard::new()
         .and_then(|mut cb| cb.set_text(text.to_string()))
         .is_ok()
