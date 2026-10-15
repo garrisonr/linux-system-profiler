@@ -52,6 +52,110 @@ fn metadata_refresh_command_for(pm: Option<&str>) -> Option<(String, Vec<String>
     Some((elevate.to_string(), vec!["apt-get".into(), "update".into()]))
 }
 
+/// How old apt's package lists may be before counts scanned from them
+/// must be labelled stale. apt's own periodic refresh runs daily, so a
+/// list older than a day means the daily refresh didn't happen (or the
+/// machine was off) — exactly when silent staleness bites.
+pub const METADATA_FRESH_WINDOW_SECS: u64 = 24 * 60 * 60;
+
+/// Newest mtime among the files in /var/lib/apt/lists — the last time
+/// `apt-get update` (manual, periodic, or ours) actually landed new
+/// indexes. Falls back to the directory's own mtime. None when the
+/// directory doesn't exist (not an apt system / never populated).
+pub fn apt_lists_refreshed_at() -> Option<std::time::SystemTime> {
+    apt_lists_refreshed_at_in(std::path::Path::new("/var/lib/apt/lists"))
+}
+
+fn apt_lists_refreshed_at_in(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if let Ok(md) = e.metadata() {
+                if md.is_file() {
+                    if let Ok(m) = md.modified() {
+                        if newest.map(|n| m > n).unwrap_or(true) { newest = Some(m); }
+                    }
+                }
+            }
+        }
+    }
+    newest.or_else(|| std::fs::metadata(dir).and_then(|m| m.modified()).ok())
+}
+
+/// Format unix seconds as ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ). Pure —
+/// civil-from-days algorithm, no `date` subprocess, so it's testable.
+pub fn iso_from_unix(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let tod = secs % 86_400;
+    // Howard Hinnant's civil_from_days (public-domain algorithm).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("{year:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", tod / 3600, (tod / 60) % 60, tod % 60)
+}
+
+/// "just now" / "5 minutes" / "3 hours" / "2 days" — for humans.
+pub fn human_age(secs: u64) -> String {
+    if secs < 90 { "just now".into() }
+    else if secs < 3600 { format!("{} minutes", secs / 60) }
+    else if secs < 48 * 3600 { format!("{} hours", secs / 3600) }
+    else { format!("{} days", secs / 86_400) }
+}
+
+/// Freshness verdict for one scan: (last-refresh ISO, stale?). Pure —
+/// the caller supplies `now` and the on-disk refresh time. Stale when
+/// there is no refresh on record at all, or it's older than the window.
+pub fn freshness_fields(
+    now: std::time::SystemTime,
+    last: Option<std::time::SystemTime>,
+) -> (Option<String>, bool) {
+    match last {
+        None => (None, true),
+        Some(t) => {
+            let age = now.duration_since(t).map(|d| d.as_secs()).unwrap_or(0);
+            let iso = t.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| iso_from_unix(d.as_secs())).ok();
+            (iso, age > METADATA_FRESH_WINDOW_SECS)
+        }
+    }
+}
+
+/// The plain-language stale note a scan carries when its counts rest on
+/// old lists. Matches what the Updates surface shows — the counts may
+/// be wrong and the app says so instead of implying they're current.
+fn stale_note(now: std::time::SystemTime, last: Option<std::time::SystemTime>) -> String {
+    match last {
+        Some(t) => {
+            let age = now.duration_since(t).map(|d| d.as_secs()).unwrap_or(0);
+            format!(
+                "Update counts may be out of date — the package lists were last refreshed {} ago. \"Check for updates\" refreshes the lists first, then counts.",
+                human_age(age)
+            )
+        }
+        None => "Update counts may be out of date — the package lists have never been refreshed on this machine. \"Check for updates\" refreshes the lists first, then counts.".into(),
+    }
+}
+
+/// Stamp an UpdatesInfo collected right after a metadata refresh (the
+/// explicit Check flow): this scan's counts are known-current. Keeps
+/// the structured fields and the note coherent in one place.
+pub fn mark_refreshed(info: &mut UpdatesInfo) {
+    info.refreshed_this_check = true;
+    info.metadata_stale = false;
+    info.metadata_last_refresh = freshness_fields(std::time::SystemTime::now(), apt_lists_refreshed_at()).0
+        .or_else(|| Some(iso_from_unix(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))));
+    info.notes.retain(|n| !n.starts_with("Update counts may be out of date"));
+    info.notes.insert(0, "Package lists were refreshed just now — these results are current.".into());
+}
+
 /// Package names apt says it deferred due to Ubuntu's phased rollout.
 /// apt prints them either after the colon on the marker line or on the
 /// following indented line(s):
@@ -184,6 +288,18 @@ pub fn collect_updates() -> UpdatesInfo {
                 }
             }
         }
+        // Freshness honesty (fix-claim #2 was PARTIAL at v0.8.7): this
+        // scan reads whatever lists are on disk — it does NOT refresh
+        // them. Carry the freshness on the data and SAY when the lists
+        // are old, so launch-time counts never silently pose as
+        // current. The GUI's initial flow runs the existing Check
+        // (refresh first) automatically when this says stale.
+        let now = std::time::SystemTime::now();
+        let last = apt_lists_refreshed_at();
+        let (iso, stale) = freshness_fields(now, last);
+        info.metadata_last_refresh = iso;
+        info.metadata_stale = stale;
+        if stale { info.notes.push(stale_note(now, last)); }
     } else if which("dnf") {
         if let Some(out) = cmd("dnf", &["check-update", "--quiet"]) {
             for line in out.lines() { let n = line.split_whitespace().next().unwrap_or("");
@@ -329,5 +445,69 @@ mod tests {
         assert!(metadata_refresh_command_for(Some("pacman")).is_none());
         assert!(metadata_refresh_command_for(Some("dnf")).is_none());
         assert!(metadata_refresh_command_for(None).is_none());
+    }
+
+    #[test]
+    fn iso_from_unix_known_values() {
+        assert_eq!(iso_from_unix(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_from_unix(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(iso_from_unix(1_761_000_000), "2025-10-20T22:40:00Z");
+        // Leap day: 2024-02-29 12:00:00 UTC.
+        assert_eq!(iso_from_unix(1_709_208_000), "2024-02-29T12:00:00Z");
+    }
+
+    #[test]
+    fn freshness_window_and_never_refreshed() {
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_761_000_000);
+        // 1 hour old: fresh, ISO carried.
+        let (iso, stale) = freshness_fields(now, Some(now - Duration::from_secs(3600)));
+        assert!(!stale);
+        assert_eq!(iso.as_deref(), Some("2025-10-20T21:40:00Z"));
+        // 25 hours old: stale — past the daily-refresh window.
+        let (_, stale) = freshness_fields(now, Some(now - Duration::from_secs(25 * 3600)));
+        assert!(stale);
+        // Exactly at the window edge: still fresh.
+        let (_, stale) = freshness_fields(now, Some(now - Duration::from_secs(METADATA_FRESH_WINDOW_SECS)));
+        assert!(!stale);
+        // No refresh on record: stale, no ISO.
+        let (iso, stale) = freshness_fields(now, None);
+        assert!(stale);
+        assert!(iso.is_none());
+    }
+
+    #[test]
+    fn stale_note_names_the_age_and_the_remedy() {
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_761_000_000);
+        let n = stale_note(now, Some(now - Duration::from_secs(3 * 3600)));
+        assert!(n.contains("may be out of date"), "{n}");
+        assert!(n.contains("3 hours"), "{n}");
+        assert!(n.contains("Check for updates"), "{n}");
+        let n = stale_note(now, None);
+        assert!(n.contains("never been refreshed"), "{n}");
+    }
+
+    #[test]
+    fn mark_refreshed_clears_staleness() {
+        let mut info = UpdatesInfo {
+            checked: true, metadata_stale: true,
+            notes: vec!["Update counts may be out of date — old note.".into()],
+            ..Default::default()
+        };
+        mark_refreshed(&mut info);
+        assert!(info.refreshed_this_check);
+        assert!(!info.metadata_stale);
+        assert!(info.metadata_last_refresh.is_some());
+        assert!(info.notes.iter().all(|n| !n.contains("may be out of date")));
+        assert!(info.notes[0].contains("refreshed just now"));
+    }
+
+    #[test]
+    fn human_age_buckets() {
+        assert_eq!(human_age(30), "just now");
+        assert_eq!(human_age(600), "10 minutes");
+        assert_eq!(human_age(7200), "2 hours");
+        assert_eq!(human_age(3 * 86_400), "3 days");
     }
 }

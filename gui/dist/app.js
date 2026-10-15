@@ -422,7 +422,7 @@ const VIEWS = {
       }
     }
     const volOpts = (p.volumes || []).map((v) =>
-      `<option value="${esc(v.mount)}"${v.read_only ? " disabled" : ""}${v.mount === "/" ? " selected" : ""}>${esc(v.device || "device")} · ${esc(v.mount)} · ${esc(v.fs_type)} · ${gb(v.avail_bytes)} free${v.read_only ? " · read-only" : ""}</option>`).join("");
+      `<option value="${esc(v.mount)}" data-device="${esc(v.device || "")}"${v.read_only ? " disabled" : ""}${v.mount === "/" ? " selected" : ""}>${esc(v.device || "device")} · ${esc(v.mount)} · ${esc(v.fs_type)} · ${gb(v.avail_bytes)} free${v.read_only ? " · read-only" : ""}</option>`).join("");
     // Unmounted partitions (enumerated via lsblk) are listed too —
     // disabled, with their state spelled out. Before v0.8.6 they were
     // simply invisible here: an unmounted eMMC rescue install did not
@@ -614,6 +614,17 @@ const VIEWS = {
       (p.updates.system_updates[0] || {}).source] || "system-arch";
     let h = `<div class="row"><button class="pill secondary" data-check-updates type="button">Check for updates</button>` +
       `<span class="empty" data-check-status></span></div>`;
+    // Stale counts SAY they're stale (v0.8.8): the launch scan reads
+    // the lists on disk; when they're older than apt's daily refresh
+    // rhythm the banner names it instead of letting old counts pose
+    // as current. The initial load already tried the refresh path
+    // once (autoRefreshIfStale) — if this banner is still here, that
+    // refresh didn't complete and Check is the manual route.
+    if (p.updates.metadata_stale) {
+      h += `<p class="stale-note">⚠ These counts may be out of date — the package lists were last refreshed ` +
+        `${p.updates.metadata_last_refresh ? esc(new Date(p.updates.metadata_last_refresh).toLocaleString()) : "never"}. ` +
+        `Check for updates refreshes the lists first, then counts.</p>`;
+    }
     h += group("System packages", p.updates.system_updates, sysKey, false,
       p.updates.system_updates.some((u) => u.note) ? "phased" : null);
     h += group("Firmware (LVFS)", p.updates.firmware_updates, "firmware", true, "lvfs");
@@ -962,7 +973,9 @@ async function runSpeed(btn) {
   try {
     if (kind === "disk") {
       const sel = card.querySelector("[data-disk-volume]");
-      const r = await invoke("run_disk_test", { mount: sel ? sel.value : null });
+      const deviceHint = sel && sel.selectedOptions && sel.selectedOptions[0]
+        ? sel.selectedOptions[0].dataset.device || null : null;
+      const r = await invoke("run_disk_test", { mount: sel ? sel.value : null, deviceHint });
       gaugeSet(gaugeFor("write"), r.write_mbps);
       gaugeSet(gaugeFor("read"), r.read_mbps);
       gaugeEls.forEach((el) => { labelFor(el).textContent = "Done"; });
@@ -1183,6 +1196,29 @@ async function load(isRefresh) {
     showToast("Profile refreshed — generated " + (isNaN(t) ? P.generated_at : t.toLocaleTimeString()));
   }
   await checkDeps();
+  if (!isRefresh) await autoRefreshIfStale();
+}
+
+/* v0.8.8: the launch scan reads apt's lists as they lie on disk. When
+   the backend says they're stale, run the EXISTING Check path
+   (refresh_update_check — elevated metadata refresh, then re-count)
+   once, automatically, so first-screen counts are current. If the
+   refresh can't complete (password prompt dismissed, agent missing),
+   the stale banner + note stay on the Updates view: the counts are
+   labelled, never silently wrong. Once per launch, and never after a
+   manual Refresh — a dismissed prompt is an answer, not a retry cue. */
+let autoChecked = false;
+async function autoRefreshIfStale() {
+  if (autoChecked || !P || !P.updates || !P.updates.metadata_stale) return;
+  autoChecked = true;
+  try {
+    P.updates = await invoke("refresh_update_check");
+    renderNav();
+    select(current);
+    showToast("The package lists were out of date — refreshed them, so update counts are current.");
+  } catch (e) {
+    showToast("Couldn't refresh the package lists — update counts may be out of date. See the Updates tab.");
+  }
 }
 
 /* ---------------- wiring ---------------- */

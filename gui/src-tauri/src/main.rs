@@ -324,7 +324,7 @@ fn share_email(cache: State<ProfileCache>) -> Result<(), String> {
 struct SpeedProgress { test: String, phase: String, value: f64 }
 
 #[tauri::command]
-async fn run_disk_test(app: tauri::AppHandle, mount: Option<String>) -> Result<DiskSpeed, String> {
+async fn run_disk_test(app: tauri::AppHandle, mount: Option<String>, device_hint: Option<String>) -> Result<DiskSpeed, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // A picked volume is validated against a FRESH volume list: it
         // must still be mounted, and writable — the picker disables
@@ -333,8 +333,20 @@ async fn run_disk_test(app: tauri::AppHandle, mount: Option<String>) -> Result<D
         let (dir, device) = match &mount {
             Some(m) => {
                 let vols = linux_system_profiler::collectors::collect_volumes();
-                let v = vols.iter().find(|v| &v.mount == m)
-                    .ok_or_else(|| "That drive is no longer mounted.".to_string())?;
+                let v = vols.iter().find(|v| &v.mount == m).ok_or_else(|| {
+                    // Say WHICH state the drive is in, in the picker's
+                    // own words: a partition lsblk knows but that isn't
+                    // mounted gets the mount instruction, not a
+                    // disappearance report (Gemini re-audit 2026-10-15).
+                    let parts = linux_system_profiler::collectors::collect_disk_partitions();
+                    let unmounted = parts.iter().any(|p| p.mount.is_none()
+                        && (device_hint.as_deref() == Some(p.device.as_str()) || p.device == *m));
+                    if unmounted {
+                        "Not mounted — mount this drive to run a test".to_string()
+                    } else {
+                        "That drive is no longer mounted.".to_string()
+                    }
+                })?;
                 if v.read_only {
                     return Err(format!(
                         "{} is mounted read-only — the speed test needs to write a temporary file there.",
@@ -558,7 +570,10 @@ async fn refresh_update_check(cache: State<'_, ProfileCache>, renders: State<'_,
         }
         let mut info = linux_system_profiler::updates::collect_updates();
         if refreshed {
-            info.notes.insert(0, "Package lists were refreshed just now — these results are current.".into());
+            // Structured freshness + the "refreshed just now" note, in
+            // one place (updates::mark_refreshed) so the fields the UI
+            // keys off can never disagree with the note it shows.
+            linux_system_profiler::updates::mark_refreshed(&mut info);
         }
         Ok(info)
     }).await.map_err(|e| e.to_string())?;

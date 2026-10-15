@@ -96,6 +96,13 @@ pub fn collect_profile_with_progress(
             }
         }};
     }
+    // Degradation notes from the collectors that can fail silently
+    // (storage/network/partitions/accounts report variants). Loaded
+    // back from the checkpoint on resume so a resumed profile keeps
+    // the warnings its collectors earned.
+    let mut coll_warnings: Vec<String> = done.get("collection_warnings")
+        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+        .unwrap_or_default();
 
     let mut p = Profile {
         schema_version: 4,
@@ -109,15 +116,31 @@ pub fn collect_profile_with_progress(
     p.system = collect!("system", model::SystemInfo, collectors::collect_system());
     p.cpu = collect!("cpu", model::CpuInfo, collectors::collect_cpu());
     p.memory = collect!("memory", model::MemoryInfo, collectors::collect_memory());
-    p.storage = collect!("storage", Vec<model::StorageDevice>, collectors::collect_storage());
-    p.network = collect!("network", Vec<model::NetworkInterface>, collectors::collect_network());
+    p.storage = collect!("storage", Vec<model::StorageDevice>, {
+        let (v, w) = collectors::collect_storage_report();
+        if let Some(w) = w { coll_warnings.push(w); }
+        v
+    });
+    p.network = collect!("network", Vec<model::NetworkInterface>, {
+        let (v, w) = collectors::collect_network_report();
+        if let Some(w) = w { coll_warnings.push(w); }
+        v
+    });
     p.graphics = collect!("graphics", Vec<model::GpuInfo>, collectors::collect_graphics());
     p.displays = collect!("displays", Vec<model::DisplayInfo>, collectors::collect_displays());
     p.volumes = collect!("volumes", Vec<model::VolumeInfo>, collectors::collect_volumes());
-    p.disk_partitions = collect!("disk_partitions", Vec<model::DiskPartition>, collectors::collect_disk_partitions());
+    p.disk_partitions = collect!("disk_partitions", Vec<model::DiskPartition>, {
+        let (v, w) = collectors::collect_disk_partitions_report();
+        if let Some(w) = w { coll_warnings.push(w); }
+        v
+    });
     p.printers = collect!("printers", Vec<model::PrinterInfo>, collectors::collect_printers());
     p.bluetooth = collect!("bluetooth", Vec<model::PairedDevice>, collectors::collect_bluetooth());
-    p.accounts = collect!("accounts", Vec<model::UserAccount>, collectors::collect_accounts());
+    p.accounts = collect!("accounts", Vec<model::UserAccount>, {
+        let (v, w) = collectors::collect_accounts_report();
+        if let Some(w) = w { coll_warnings.push(w); }
+        v
+    });
     p.security = collect!("security", model::SecurityInfo, collectors::collect_security());
     p.power = collect!("power", Vec<model::BatteryInfo>, collectors::collect_power());
     p.power_detail = collectors::collect_power_detail();
@@ -130,6 +153,20 @@ pub fn collect_profile_with_progress(
     p.updates = if check_updates {
         collect!("updates", model::UpdatesInfo, updates::collect_updates())
     } else { model::UpdatesInfo::default() };
+    // The package-list truncation note rides inside SoftwareInfo.extra
+    // (checkpoint-safe); mirror it into the warnings so it surfaces as
+    // a health flag next to the collector degradations.
+    if let Some(note) = p.software.extra.get("explicit_packages_truncated") {
+        if !coll_warnings.contains(note) { coll_warnings.push(note.clone()); }
+    }
+    p.collection_warnings = coll_warnings.clone();
+    if let Some(cp) = &checkpoint_path {
+        done.insert("collection_warnings".to_string(),
+            serde_json::to_value(&coll_warnings).unwrap_or(serde_json::Value::Null));
+        let text = serde_json::to_string_pretty(&serde_json::Value::Object(
+            done.iter().map(|(k, v)| (k.clone(), v.clone())).collect())).unwrap_or_default();
+        let _ = atomic_write(cp, &text);
+    }
     p.health = report::health_flags(&p);
     p
 }

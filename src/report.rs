@@ -10,6 +10,12 @@ pub fn health_flags(p: &Profile) -> Vec<HealthFlag> {
     let mut push = |sev: &str, comp: &str, msg: String, hint: Option<String>| {
         f.push(HealthFlag { severity: sev.into(), component: comp.into(), message: msg, hint });
     };
+    // Collector degradations the profile recorded (a probe tool
+    // missing/failing, a capped list) — shown, never hidden behind
+    // plausible emptiness.
+    for w in &p.collection_warnings {
+        push("amber", "Data collection", w.clone(), None);
+    }
     for b in &p.power {
         if let Some(h) = b.health_percent {
             let sev = if h >= 80.0 { "green" } else if h >= 60.0 { "amber" } else { "red" };
@@ -160,4 +166,29 @@ pub fn markdown(p: &Profile, sanitized: bool) -> String {
     for h in &p.health { s += &format!("- **{}** {}: {}\n", h.severity, h.component, h.message); }
     if sanitized { s += "\n_Sanitized export: MACs masked, serials + hostname hashed._\n"; }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collection_warnings_become_health_flags() {
+        // The house-rule fix: a degraded collector must be VISIBLE in
+        // the profile's warnings surface, not hidden behind an empty
+        // section. health_flags is that surface (UI + exports).
+        let mut p = Profile::default();
+        p.collection_warnings = vec![
+            "Couldn't read the disk partition list — lsblk failed.".into(),
+            "Couldn't read SMART drive health — smartctl isn't installed.".into(),
+        ];
+        let flags = health_flags(&p);
+        let data_flags: Vec<_> = flags.iter().filter(|f| f.component == "Data collection").collect();
+        assert_eq!(data_flags.len(), 2);
+        assert!(data_flags.iter().all(|f| f.severity == "amber"));
+        assert!(data_flags[0].message.contains("lsblk failed"));
+        // And a clean profile grows no such flags.
+        let clean = health_flags(&Profile::default());
+        assert!(clean.iter().all(|f| f.component != "Data collection"));
+    }
 }

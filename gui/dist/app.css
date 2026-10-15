@@ -112,11 +112,14 @@ table.kv th { width: 38%; color: var(--ink-2); font-weight: 500; }
 .rail h2 { font-size: .8125rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); margin: 1rem 0 .25rem; }
 .rail h2:first-child { margin-top: 0; }
 
-.sheet { border: 1px solid var(--line); border-radius: 14px; padding: 1rem; width: min(44rem, 92vw); }
+.sheet { border: 1px solid var(--line); border-radius: 14px; padding: 1rem; width: min(44rem, 92vw);
+  max-height: 92vh; overflow-y: auto; }
 .sheet::backdrop { background: rgba(0,0,0,.32); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; }
 .sheet-head h2 { margin: 0; letter-spacing: -.01em; }
-.log { max-height: 50vh; overflow: auto; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: .75rem; }
+.log { max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; font-size: .75rem; }
+.stale-note { border: 1px solid var(--amber); border-radius: 10px; padding: .5rem .75rem;
+  color: var(--ink); background: color-mix(in srgb, var(--amber) 12%, var(--paper)); }
 
 /* Laptop / tablet landscape: the rail folds into a strip under the detail.
    (v0.4.0 bug: the old separate health-strip element was removed while this

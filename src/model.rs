@@ -33,6 +33,14 @@ pub struct Profile {
     pub software: SoftwareInfo,
     pub updates: UpdatesInfo,
     pub health: Vec<HealthFlag>,
+    /// Plain-language notes from collectors whose probe tools failed or
+    /// were missing (lsblk, smartctl, ip, …). A collector that can't
+    /// read its data must SAY so here — never render as plausible
+    /// emptiness (house rule; Gemini re-audit 2026-10-15 caught lsblk /
+    /// smartctl / ip failing silently). Surfaced as health flags and
+    /// carried into exports.
+    #[serde(default)]
+    pub collection_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -312,6 +320,22 @@ pub struct UpdatesInfo {
     pub firmware_updates: Vec<UpdateItem>,
     pub flatpak_updates: Vec<UpdateItem>,
     pub notes: Vec<String>,
+    /// apt only: ISO-8601 time the local package lists were last
+    /// refreshed (from /var/lib/apt/lists mtimes), when knowable.
+    #[serde(default)]
+    pub metadata_last_refresh: Option<String>,
+    /// apt only: true when this scan read lists older than the
+    /// freshness window (or never refreshed) — the counts may be
+    /// stale and the Updates surface must say so, never silently
+    /// present them as current (fix-claim #2, Gemini re-audit
+    /// 2026-10-15: PARTIAL because the initial scan never refreshed).
+    #[serde(default)]
+    pub metadata_stale: bool,
+    /// True when this scan ran immediately after a metadata refresh
+    /// in the same flow (the explicit Check), so its counts are
+    /// known-current rather than inherited from old lists.
+    #[serde(default)]
+    pub refreshed_this_check: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

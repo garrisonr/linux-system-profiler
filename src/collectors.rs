@@ -231,8 +231,19 @@ pub fn sata_wear_percent(v: &serde_json::Value) -> Option<i64> {
 }
 
 pub fn collect_storage() -> Vec<StorageDevice> {
+    collect_storage_report().0
+}
+
+/// Storage plus an honest degradation note. SMART fields used to stay
+/// None with no trace when smartctl was missing or failed on every
+/// drive — plausible emptiness, banned by the house rule (Gemini
+/// re-audit 2026-10-15). The note names what couldn't be read.
+pub fn collect_storage_report() -> (Vec<StorageDevice>, Option<String>) {
     let mut devs = Vec::new();
-    let Ok(entries) = fs::read_dir("/sys/class/block") else { return devs };
+    let Ok(entries) = fs::read_dir("/sys/class/block") else { return (devs, None) };
+    let smartctl_present = which("smartctl");
+    let mut smart_attempted = 0usize;
+    let mut smart_read = 0usize;
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("dm-") || name.starts_with("zram") { continue; }
@@ -263,8 +274,10 @@ pub fn collect_storage() -> Vec<StorageDevice> {
             }
         }
         if which("smartctl") {
+            smart_attempted += 1;
             if let Some(out) = cmd("smartctl", &["-j", "-a", &format!("/dev/{name}")]) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
+                    smart_read += 1;
                     d.smart_health = v.pointer("/smart_status/passed").and_then(|b| b.as_bool())
                         .map(|p| if p { "PASSED".into() } else { "FAILED".into() });
                     d.smart_temp_c = v.pointer("/temperature/current").and_then(|n| n.as_i64());
@@ -277,7 +290,19 @@ pub fn collect_storage() -> Vec<StorageDevice> {
         devs.push(d);
     }
     devs.sort_by(|a, b| a.name.cmp(&b.name));
-    devs
+    let warning = if devs.is_empty() {
+        None
+    } else if !smartctl_present {
+        Some("Couldn't read SMART drive health — smartctl (package smartmontools) isn't installed, so drive health, temperature and wear are unknown.".to_string())
+    } else if smart_attempted > 0 && smart_read == 0 {
+        Some("Couldn't read SMART data for any drive — smartctl ran but returned nothing usable (it may need administrator permission), so drive health is unknown.".to_string())
+    } else if smart_read < smart_attempted {
+        Some(format!("Couldn't read SMART data for {} of {} drives — those drives' health is unknown.",
+            smart_attempted - smart_read, smart_attempted))
+    } else {
+        None
+    };
+    (devs, warning)
 }
 
 fn classify_iface(name: &str, base: &str) -> (String, bool) {
@@ -298,8 +323,19 @@ fn classify_iface(name: &str, base: &str) -> (String, bool) {
 }
 
 pub fn collect_network() -> Vec<NetworkInterface> {
+    collect_network_report().0
+}
+
+/// Network interfaces plus an honest degradation note. When `ip` is
+/// missing or fails, every interface used to render with an empty
+/// address list — indistinguishable from "no addresses" (house-rule
+/// violation, Gemini re-audit 2026-10-15).
+pub fn collect_network_report() -> (Vec<NetworkInterface>, Option<String>) {
     let mut ifs = Vec::new();
-    let Ok(entries) = fs::read_dir("/sys/class/net") else { return ifs };
+    let Ok(entries) = fs::read_dir("/sys/class/net") else { return (ifs, None) };
+    let ip_present = which("ip");
+    let mut ip_attempted = 0usize;
+    let mut ip_read = 0usize;
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if name == "lo" { continue; }
@@ -308,8 +344,10 @@ pub fn collect_network() -> Vec<NetworkInterface> {
         let driver = fs::read_link(format!("{base}/device/driver")).ok()
             .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()));
         let mut addresses = Vec::new();
+        ip_attempted += 1;
         if let Some(out) = cmd("ip", &["-j", "addr", "show", &name]) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
+                ip_read += 1;
                 if let Some(ai) = v.get(0).and_then(|x| x.get("addr_info")).and_then(|a| a.as_array()) {
                     addresses = ai.iter().filter_map(|a| {
                         let ip = a.get("local")?.as_str()?; let pre = a.get("prefixlen")?.as_u64()?;
@@ -338,7 +376,16 @@ pub fn collect_network() -> Vec<NetworkInterface> {
     }
     // Physical first, then virtual; alphabetical within each group.
     ifs.sort_by(|a, b| a.is_virtual.cmp(&b.is_virtual).then(a.name.cmp(&b.name)));
-    ifs
+    let warning = if ifs.is_empty() {
+        None
+    } else if !ip_present {
+        Some("Couldn't read network addresses — the ip tool (package iproute2) isn't installed, so interface address lists are empty.".to_string())
+    } else if ip_attempted > 0 && ip_read == 0 {
+        Some("Couldn't read network addresses — 'ip -j addr' failed on every interface, so address lists are empty.".to_string())
+    } else {
+        None
+    };
+    (ifs, warning)
 }
 
 pub fn collect_graphics() -> Vec<GpuInfo> {
@@ -664,8 +711,8 @@ pub fn collect_software() -> SoftwareInfo {
     // turf (Gemini audit 2026-10-14). Debian's analog of `pacman -Qe` is
     // apt-mark's manual set joined with dpkg's version table; Fedora's is
     // dnf's userinstalled set, falling back to the full rpm list.
-    let explicit_packages = if which("pacman") {
-        cmd("pacman", &["-Qe"]).map(|o| parse_pkg_lines(&o).into_iter().take(600).collect()).unwrap_or_default()
+    let explicit_full: Vec<NamedVersion> = if which("pacman") {
+        cmd("pacman", &["-Qe"]).map(|o| parse_pkg_lines(&o)).unwrap_or_default()
     } else if which("dpkg-query") {
         let manual: std::collections::HashSet<String> = cmd("apt-mark", &["showmanual"])
             .map(|o| o.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
@@ -673,7 +720,7 @@ pub fn collect_software() -> SoftwareInfo {
         cmd("dpkg-query", &["-W", "-f=${Package} ${Version}\n"])
             .map(|o| parse_pkg_lines(&o).into_iter()
                 .filter(|p| manual.is_empty() || manual.contains(&p.name))
-                .take(600).collect())
+                .collect())
             .unwrap_or_default()
     } else if which("rpm") {
         let userinstalled = if which("dnf") {
@@ -681,9 +728,22 @@ pub fn collect_software() -> SoftwareInfo {
                 .filter(|o| !o.trim().is_empty())
         } else { None };
         userinstalled.or_else(|| cmd("rpm", &["-qa", "--qf", "%{name} %{version}-%{release}\n"]))
-            .map(|o| parse_pkg_lines(&o).into_iter().take(600).collect())
+            .map(|o| parse_pkg_lines(&o))
             .unwrap_or_default()
     } else { Vec::new() };
+    // The 600 cap keeps a runaway package list from bloating the
+    // profile — but a capped list must SAY it's capped (LOW, Gemini
+    // re-audit 2026-10-15). The note rides in `extra`, and lib.rs
+    // mirrors it into the profile's collection warnings.
+    let explicit_total = explicit_full.len();
+    let explicit_packages: Vec<NamedVersion> =
+        explicit_full.into_iter().take(600).collect();
+    let mut extra: BTreeMap<String, String> = BTreeMap::new();
+    if explicit_total > explicit_packages.len() {
+        extra.insert("explicit_packages_truncated".to_string(), format!(
+            "Manually installed packages list truncated: showing the first {} of {} — the rest aren't listed here.",
+            explicit_packages.len(), explicit_total));
+    }
     let last_upgrade = fs::read_to_string("/var/log/pacman.log").ok()
         .and_then(|log| parse_pacman_log_last_upgrade(&log))
         .or_else(|| fs::read_to_string("/var/log/dpkg.log").ok()
@@ -744,7 +804,7 @@ pub fn collect_software() -> SoftwareInfo {
         } else { Vec::new() },
         running_services_count: cmd("systemctl", &["list-units", "--type=service", "--state=running", "--no-legend"])
             .map(|o| o.lines().count()),
-        extra: BTreeMap::new(),
+        extra,
     }
 }
 
@@ -886,9 +946,22 @@ pub fn parse_lsblk_partitions(json: &str) -> Vec<DiskPartition> {
 /// the speed-test picker needs so an unmounted drive is listed with its
 /// state instead of being invisible.
 pub fn collect_disk_partitions() -> Vec<DiskPartition> {
+    collect_disk_partitions_report().0
+}
+
+/// Disk partitions plus an honest degradation note. When lsblk fails,
+/// this used to return an empty vec with no trace — the picker and
+/// Storage view then showed "no unmounted drives" as if that were a
+/// fact about the machine (house-rule violation, Gemini re-audit
+/// 2026-10-15).
+pub fn collect_disk_partitions_report() -> (Vec<DiskPartition>, Option<String>) {
     match cmd("lsblk", &["-J", "-b", "-o", "NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,TRAN"]) {
-        Some(text) => parse_lsblk_partitions(&text),
-        None => Vec::new(),
+        Some(text) => (parse_lsblk_partitions(&text), None),
+        None => (Vec::new(), Some(if which("lsblk") {
+            "Couldn't read the disk partition list — lsblk failed, so unmounted drives may be missing from the Storage view and the disk-test picker.".to_string()
+        } else {
+            "Couldn't read the disk partition list — lsblk (package util-linux) isn't installed, so unmounted drives are missing from the Storage view and the disk-test picker.".to_string()
+        })),
     }
 }
 
@@ -927,6 +1000,14 @@ pub fn collect_bluetooth() -> Vec<PairedDevice> {
 }
 
 pub fn collect_accounts() -> Vec<UserAccount> {
+    collect_accounts_report().0
+}
+
+/// Accounts plus a truncation note when the `last -n 300` cap bites:
+/// on a busy machine an account whose latest login falls outside the
+/// newest 300 entries would otherwise show "never logged in" with no
+/// hint the history was cut (LOW, Gemini re-audit 2026-10-15).
+pub fn collect_accounts_report() -> (Vec<UserAccount>, Option<String>) {
     let mut admins: std::collections::BTreeSet<String> = Default::default();
     if let Ok(groups) = fs::read_to_string("/etc/group") {
         for line in groups.lines() {
@@ -940,7 +1021,12 @@ pub fn collect_accounts() -> Vec<UserAccount> {
         }
     }
     let mut last_map: std::collections::BTreeMap<String, String> = Default::default();
+    let mut last_truncated = false;
     if let Some(text) = cmd("last", &["-n", "300"]) {
+        // `last` appends a blank line + "wtmp begins …" footer; 300
+        // entry lines (plus that furniture) means the cap very likely
+        // cut real history off.
+        last_truncated = text.lines().filter(|l| !l.trim().is_empty()).count() >= 300;
         for line in text.lines() {
             let user = line.split_whitespace().next().unwrap_or("").to_string();
             if user.is_empty() || user == "reboot" || user == "wtmp" { continue; }
@@ -965,7 +1051,10 @@ pub fn collect_accounts() -> Vec<UserAccount> {
         }
     }
     out.sort_by_key(|a| a.uid);
-    out
+    let warning = if last_truncated {
+        Some("Login history was truncated to the most recent 300 entries — an account whose latest login is older than that shows no last-login here.".to_string())
+    } else { None };
+    (out, warning)
 }
 
 pub fn collect_security() -> SecurityInfo {

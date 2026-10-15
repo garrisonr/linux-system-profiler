@@ -99,6 +99,58 @@ pub fn mask_uuids_in(s: &str) -> String {
     out
 }
 
+/// Hex-identifier masking beyond canonical UUIDs (fix-claim #5 was
+/// PARTIAL at v0.8.7 — Gemini re-audit 2026-10-15). Catches:
+///  - raw 32-char hex UUIDs (also the /etc/machine-id shape) standing
+///    alone as tokens;
+///  - FAT volume serials, XXXX-XXXX hex;
+///  - any hex/dash identifier sitting in a by-uuid/ or by-partuuid/
+///    path segment (NTFS 16-hex volume IDs, odd variants).
+/// Deliberately BOUNDED so legitimate hex survives: candidates are
+/// standalone tokens only — a 40/64-char hex run (a git SHA, a Docker
+/// image ID) is ONE long token and never matches; 12-char short hashes
+/// (including this module's own `sha256:…` outputs) are too short to
+/// match; and the FAT pattern requires at least one a–f letter, so
+/// date-like digit pairs ("2024-1024") are not redacted.
+pub fn mask_hex_ids_in(s: &str) -> String {
+    let b = s.as_bytes();
+    let is_tok = |c: u8| c.is_ascii_hexdigit() || c == b'-';
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0; let mut last = 0;
+    while i < b.len() {
+        if is_tok(b[i]) && (i == 0 || !is_tok(b[i - 1])) {
+            // Token start: consume the maximal hex/dash run, then trim
+            // separator dashes off both ends for classification.
+            let start = i;
+            while i < b.len() && is_tok(b[i]) { i += 1; }
+            let mut cs = start; let mut ce = i;
+            while cs < ce && b[cs] == b'-' { cs += 1; }
+            while ce > cs && b[ce - 1] == b'-' { ce -= 1; }
+            let tok = &s[cs..ce];
+            let tb = tok.as_bytes();
+            let in_id_path = s[..cs].ends_with("by-uuid/") || s[..cs].ends_with("by-partuuid/");
+            let replacement = if in_id_path && (8..=36).contains(&tok.len())
+                && tb.iter().all(|c| c.is_ascii_hexdigit() || *c == b'-') {
+                Some(hash_id("uuid", tok))
+            } else if tok.len() == 32 && tb.iter().all(|c| c.is_ascii_hexdigit()) {
+                Some(hash_id("uuid", tok))
+            } else if tok.len() == 9 && tb[4] == b'-'
+                && tb.iter().enumerate().all(|(j, c)| j == 4 || c.is_ascii_hexdigit())
+                && tb.iter().any(|c| c.is_ascii_alphabetic()) {
+                Some(hash_id("volserial", tok))
+            } else { None };
+            if let Some(r) = replacement {
+                out.push_str(&s[last..cs]);
+                out.push_str(&r);
+                last = ce;
+            }
+        } else { i += 1; }
+    }
+    if last == 0 { return s.to_string(); }
+    out.push_str(&s[last..]);
+    out
+}
+
 /// If the whole string is a MAC address (6 or 8 hex byte pairs, ':' or '-'
 /// separated), return it masked; otherwise None. Key-independent: bridge
 /// and permanent hardware addresses hide under many key names.
@@ -114,9 +166,10 @@ fn mask_mac_value(s: &str) -> Option<String> {
 }
 
 /// Identifier scrubbing for any string value, whatever key it sits under:
-/// embedded UUIDs hashed, a whole-string MAC masked.
+/// embedded UUIDs hashed, other identifier-shaped hex masked, and a
+/// whole-string MAC masked.
 fn scrub_string(s: &str) -> String {
-    let s = mask_uuids_in(s);
+    let s = mask_hex_ids_in(&mask_uuids_in(s));
     if let Some(m) = mask_mac_value(&s) { return m; }
     s
 }
@@ -230,5 +283,46 @@ mod tests {
         sanitize_json(&mut v);
         let s = v.to_string();
         assert!(!s.contains("WD-SECRET123")); assert!(!s.contains("mybox")); assert!(s.contains("_NVMe"));
+    }
+    #[test] fn hex_id_variants_masked_under_any_key() {
+        // The v0.8.7 PARTIAL: raw-hex UUIDs, FAT serials and by-uuid
+        // path IDs rode through under non-keyword keys.
+        let mut v = serde_json::json!({
+            "misc": [
+                "disk 9f8e7d6c5b4a39281706f5e4d3c2b1a0 failed",
+                "vol ABCD-1234 mounted",
+                "/dev/disk/by-uuid/A2B4C6D8E0F1A2B3",
+                "/dev/disk/by-partuuid/01234567-89ab-cdef-0123-456789abcdef"
+            ]
+        });
+        sanitize_json(&mut v);
+        let s = v.to_string();
+        assert!(!s.contains("9f8e7d6c5b4a39281706f5e4d3c2b1a0"), "{s}");
+        assert!(!s.contains("ABCD-1234"), "{s}");
+        assert!(!s.contains("A2B4C6D8E0F1A2B3"), "{s}");
+        assert!(!s.contains("01234567-89ab"), "{s}");
+        assert!(s.contains("sha256:"), "{s}");
+    }
+    #[test] fn legit_hex_and_versions_survive() {
+        // The other half of the contract: bounded patterns must NOT
+        // over-redact content the report intentionally shows.
+        let keep = [
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // 64-hex docker/sha256 id
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709",                        // 40-hex SHA-1
+            "sha256:9f8e7d6c5b4a",                                          // own short-hash output (12 hex)
+            "2024-1024",                                                    // date-like digits, no hex letter
+            "6.8.0-45-generic",                                             // kernel version
+            "LD4AS016G-3200ST",                                             // memory part number
+            "image 12345678-9abc-def0-1234-56789abcdef0 pulled",             // canonical UUID handled by uuid pass
+        ];
+        for k in keep {
+            let masked = mask_hex_ids_in(k);
+            if !k.contains("12345678-9abc") {
+                assert_eq!(masked, k, "over-redacted: {k}");
+            }
+        }
+        // The FAT pattern needs a hex letter: all-digit pairs survive.
+        assert_eq!(mask_hex_ids_in("1234-5678"), "1234-5678");
+        assert_eq!(mask_hex_ids_in("AB12-34CD"), hash_id("volserial", "AB12-34CD"));
     }
 }
