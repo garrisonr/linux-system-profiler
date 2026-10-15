@@ -798,6 +798,100 @@ pub fn collect_volumes() -> Vec<VolumeInfo> {
     out
 }
 
+/// lsblk's JSON tree (only the fields the parser reads).
+#[derive(Debug, serde::Deserialize)]
+struct LsblkRoot { blockdevices: Vec<LsblkDev> }
+
+#[derive(Debug, serde::Deserialize)]
+struct LsblkDev {
+    name: String,
+    path: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(rename = "type", default)]
+    dev_type: String,
+    #[serde(default)]
+    fstype: Option<String>,
+    #[serde(default)]
+    mountpoint: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    tran: Option<String>,
+    #[serde(default)]
+    children: Vec<LsblkDev>,
+}
+
+/// Real disk families the speed-test picker cares about. Loop/zram/ram
+/// and optical drives never appear; neither do eMMC hardware boot
+/// areas (mmcblk0boot0/1, mmcblk0rpmb), which hold no filesystem.
+fn is_real_disk(name: &str) -> bool {
+    let fam = name.starts_with("sd") || name.starts_with("hd") || name.starts_with("vd")
+        || name.starts_with("xvd") || name.starts_with("nvme") || name.starts_with("mmcblk");
+    fam && !name.contains("boot") && !name.contains("rpmb")
+}
+
+fn push_partition(out: &mut Vec<DiskPartition>, d: &LsblkDev, disk: &LsblkDev) {
+    out.push(DiskPartition {
+        device: d.path.clone().unwrap_or_else(|| format!("/dev/{}", d.name)),
+        parent: disk.path.clone().or_else(|| Some(format!("/dev/{}", disk.name))),
+        disk_model: disk.model.as_ref().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
+        tran: disk.tran.clone().filter(|t| !t.is_empty())
+            .or_else(|| d.tran.clone().filter(|t| !t.is_empty())),
+        size_bytes: d.size,
+        fs_type: d.fstype.clone().filter(|f| !f.is_empty()),
+        mount: d.mountpoint.clone().filter(|m| !m.is_empty()),
+    });
+}
+
+fn walk_partitions(out: &mut Vec<DiskPartition>, d: &LsblkDev, disk: &LsblkDev) {
+    for c in &d.children {
+        match c.dev_type.as_str() {
+            // A partition can itself carry children (LUKS → dm, LVM PV →
+            // LVs): list the child, then descend so the usable leaf
+            // volumes show up too.
+            "part" | "lvm" | "crypt" | "dm" => {
+                push_partition(out, c, disk);
+                walk_partitions(out, c, disk);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Parse `lsblk -J -b` output into the flat partition list. Pure — the
+/// fixture in the tests is shaped like a real GMKtec G9 (NVMe boot
+/// drive + unmounted eMMC rescue install + USB data disk).
+pub fn parse_lsblk_partitions(json: &str) -> Vec<DiskPartition> {
+    let root: LsblkRoot = match serde_json::from_str(json) { Ok(r) => r, Err(_) => return Vec::new() };
+    let mut out = Vec::new();
+    for dev in &root.blockdevices {
+        if dev.dev_type != "disk" || !is_real_disk(&dev.name) { continue; }
+        if dev.children.is_empty() {
+            // Partitionless disk (superfloppy-style): the disk itself is
+            // the volume, when it carries a filesystem.
+            if dev.fstype.as_ref().map(|f| !f.is_empty()).unwrap_or(false) {
+                push_partition(&mut out, dev, dev);
+            }
+        } else {
+            walk_partitions(&mut out, dev, dev);
+        }
+    }
+    out.sort_by(|a, b| a.device.cmp(&b.device));
+    out
+}
+
+/// Every partition on every fixed disk, mounted or not. `collect_volumes`
+/// (df-based) only sees mounted filesystems; this is the full picture
+/// the speed-test picker needs so an unmounted drive is listed with its
+/// state instead of being invisible.
+pub fn collect_disk_partitions() -> Vec<DiskPartition> {
+    match cmd("lsblk", &["-J", "-b", "-o", "NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,TRAN"]) {
+        Some(text) => parse_lsblk_partitions(&text),
+        None => Vec::new(),
+    }
+}
+
 pub fn collect_printers() -> Vec<PrinterInfo> {
     let mut out = Vec::new();
     let default = cmd("timeout", &["5", "lpstat", "-d"])
@@ -1005,5 +1099,65 @@ mod volume_tests {
         assert!(mount_options_ro("ro"));
         assert!(!mount_options_ro("rw,relatime"));
         assert!(!mount_options_ro("rw,errors=remount-ro")); // substring must not trip it
+    }
+}
+
+#[cfg(test)]
+mod lsblk_tests {
+    use super::parse_lsblk_partitions;
+
+    // Shaped like Dickles' GMKtec G9: NVMe boot drive (mounted), an
+    // unmounted eMMC rescue install, eMMC hardware boot areas, a USB
+    // data disk, plus loop/zram noise that must never appear.
+    const G9: &str = r#"{"blockdevices": [
+      {"name":"sda","path":"/dev/sda","size":8001563222016,"type":"disk","fstype":null,"mountpoint":null,"model":"Desk SSD","tran":"usb","children":[
+        {"name":"sda1","path":"/dev/sda1","size":8001561822208,"type":"part","fstype":"exfat","mountpoint":"/media/richard/Desk SSD","model":null,"tran":null}]},
+      {"name":"mmcblk0","path":"/dev/mmcblk0","size":62545461248,"type":"disk","fstype":null,"mountpoint":null,"model":null,"tran":"mmc","children":[
+        {"name":"mmcblk0p1","path":"/dev/mmcblk0p1","size":536870912,"type":"part","fstype":"vfat","mountpoint":null},
+        {"name":"mmcblk0p2","path":"/dev/mmcblk0p2","size":61999349760,"type":"part","fstype":"ext4","mountpoint":null}]},
+      {"name":"mmcblk0boot0","path":"/dev/mmcblk0boot0","size":4194304,"type":"disk","fstype":null,"mountpoint":null,"tran":"mmc"},
+      {"name":"mmcblk0boot1","path":"/dev/mmcblk0boot1","size":4194304,"type":"disk","fstype":null,"mountpoint":null,"tran":"mmc"},
+      {"name":"nvme0n1","path":"/dev/nvme0n1","size":2048408248320,"type":"disk","fstype":null,"mountpoint":null,"model":"superdog","tran":"nvme","children":[
+        {"name":"nvme0n1p1","path":"/dev/nvme0n1p1","size":536870912,"type":"part","fstype":"vfat","mountpoint":"/boot/efi"},
+        {"name":"nvme0n1p2","path":"/dev/nvme0n1p2","size":2047861456896,"type":"part","fstype":"ext4","mountpoint":"/"}]},
+      {"name":"loop0","path":"/dev/loop0","size":104857600,"type":"loop","fstype":"squashfs","mountpoint":"/snap/core","children":[]},
+      {"name":"zram0","path":"/dev/zram0","size":8589934592,"type":"disk","fstype":"swap","mountpoint":"[SWAP]"}
+    ]}"#;
+
+    #[test]
+    fn unmounted_emmc_partitions_are_listed() {
+        let parts = parse_lsblk_partitions(G9);
+        let p2 = parts.iter().find(|p| p.device == "/dev/mmcblk0p2")
+            .expect("eMMC root partition must be enumerated even though unmounted");
+        assert_eq!(p2.mount, None);
+        assert_eq!(p2.fs_type.as_deref(), Some("ext4"));
+        assert_eq!(p2.parent.as_deref(), Some("/dev/mmcblk0"));
+        assert_eq!(p2.tran.as_deref(), Some("mmc"));
+        assert_eq!(p2.size_bytes, Some(61999349760));
+    }
+
+    #[test]
+    fn mounted_partitions_keep_their_mounts() {
+        let parts = parse_lsblk_partitions(G9);
+        let root = parts.iter().find(|p| p.device == "/dev/nvme0n1p2").unwrap();
+        assert_eq!(root.mount.as_deref(), Some("/"));
+        let desk = parts.iter().find(|p| p.device == "/dev/sda1").unwrap();
+        assert_eq!(desk.mount.as_deref(), Some("/media/richard/Desk SSD"));
+        assert_eq!(desk.disk_model.as_deref(), Some("Desk SSD"));
+    }
+
+    #[test]
+    fn hardware_boot_areas_and_virtual_devices_never_appear() {
+        let parts = parse_lsblk_partitions(G9);
+        assert!(parts.iter().all(|p| !p.device.contains("boot0") && !p.device.contains("boot1")));
+        assert!(parts.iter().all(|p| !p.device.starts_with("/dev/loop")));
+        assert!(parts.iter().all(|p| !p.device.starts_with("/dev/zram")));
+        assert_eq!(parts.len(), 5); // sda1, mmcblk0p1, mmcblk0p2, nvme0n1p1, nvme0n1p2
+    }
+
+    #[test]
+    fn garbage_json_yields_no_partitions() {
+        assert!(parse_lsblk_partitions("not json").is_empty());
+        assert!(parse_lsblk_partitions("{}").is_empty());
     }
 }

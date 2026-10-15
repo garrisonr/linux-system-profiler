@@ -43,6 +43,7 @@ button { font: inherit; }
 .pill.secondary { font-weight: 500; }
 .pill.danger { background: var(--red); border-color: transparent; color: #fff; font-weight: 600; }
 .pill[disabled] { opacity: .45; cursor: default; }
+.pill.mini { height: auto; padding: .15rem .6rem; font-size: .85em; margin-left: .4rem; vertical-align: middle; }
 
 .app { display: grid; grid-template-columns: 16rem 1fr 17.5rem; height: 100dvh; }
 

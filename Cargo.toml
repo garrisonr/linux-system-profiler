@@ -1,6 +1,6 @@
 [package]
 name = "linux-system-profiler"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2021"
 license = "MIT"
 description = "Apple System Information, for Linux — unified hardware/software profile with a check-only updates hub"

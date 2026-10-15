@@ -10,8 +10,14 @@ use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DiskSpeed {
-    /// The directory the test ran in (the volume's mount point).
+    /// The volume the user picked (its mount point).
     pub path: String,
+    /// The directory the test file actually ran in, when that isn't
+    /// the mount point itself: a system drive's root (/) is not
+    /// user-writable, so a folder on the same filesystem stood in
+    /// (see resolve_test_dir). None when the file ran at the mount.
+    #[serde(default)]
+    pub test_dir: Option<String>,
     /// The block device behind the volume, when known — so a pasted
     /// result names the drive unambiguously ("Tested /dev/sda1 at
     /// /media/…/Desk SSD").
@@ -46,13 +52,118 @@ pub fn pick_size_mb(free: u64) -> Option<u64> {
     None
 }
 
+/// Device id of the filesystem containing `p` (st_dev) — the proof
+/// that two directories sit on the same filesystem.
+fn fs_dev(p: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(p).ok().map(|m| m.dev())
+}
+
+/// Cheap writability probe: create a one-byte file, delete it. Never
+/// guess from permission bits — filesystems (and ACLs, and read-only
+/// mounts) lie; an actual create is the truth.
+fn probe_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(
+        ".lsp-probe-{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos()).unwrap_or(0)
+    ));
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(mut f) => {
+            let ok = f.write_all(&[0]).is_ok();
+            drop(f);
+            let _ = std::fs::remove_file(&probe);
+            ok
+        }
+        Err(_) => false,
+    }
+}
+
+/// Where the test file for the volume mounted at `mount` can actually
+/// live. The mount root itself wins when the user's account can write
+/// there (data drives). A system drive's root (/) normally isn't
+/// user-writable — then the first writable directory ON THE SAME
+/// FILESYSTEM (proven by device id) stands in: the app's cache folder,
+/// the home folder, the system temp dir. Measuring through any of
+/// those measures the same physical drive; measuring through a
+/// different filesystem would measure the wrong disk, so those are
+/// never accepted.
+pub fn resolve_test_dir(mount: &Path) -> Result<PathBuf, String> {
+    let want_dev = fs_dev(mount).ok_or_else(|| format!(
+        "{} isn't available anymore — the drive may have been unplugged or unmounted. \
+         Re-run the profile and pick it again.",
+        mount.display()
+    ))?;
+    if probe_writable(mount) { return Ok(mount.to_path_buf()); }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        if !xdg.is_empty() {
+            candidates.push(PathBuf::from(xdg).join("linux-system-profiler"));
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            candidates.push(PathBuf::from(&home).join(".cache").join("linux-system-profiler"));
+            candidates.push(PathBuf::from(&home));
+        }
+    }
+    candidates.push(std::env::temp_dir());
+    for cand in candidates {
+        let _ = std::fs::create_dir_all(&cand);
+        if fs_dev(&cand) != Some(want_dev) { continue; }
+        if probe_writable(&cand) { return Ok(cand); }
+    }
+    Err(format!(
+        "The speed test found nowhere to write on the drive mounted at {}. \
+         The top of that drive isn't writable by your account, and no folder on the \
+         same drive passed the write check either. If this is your own drive, check \
+         its permissions — or mount it somewhere your account can write and try again.",
+        mount.display()
+    ))
+}
+
+/// Translate an I/O failure into what happened + what it means + what
+/// to do. A raw "open: Permission denied (os error 13)" tells the user
+/// nothing (Dickles, 2026-10-15 — the boot-drive test "failed" with
+/// exactly that). The technical detail rides at the end so a copied
+/// error still helps a bug report.
+pub fn plain_io_error(context: &str, path: &Path, e: &std::io::Error) -> String {
+    let detail = format!("Technical detail: {e}");
+    match e.raw_os_error() {
+        Some(13) | Some(1) => format!(
+            "Couldn't {context} in {} — permission denied. Your user account isn't allowed to write there, \
+             and nothing was changed. If this is your own drive, check the folder's permissions, or pick a \
+             drive your account can write to. {detail}",
+            path.display()
+        ),
+        Some(28) => format!(
+            "Couldn't {context} in {} — the drive ran out of room mid-test. Free some space on this drive \
+             and try again. {detail}",
+            path.display()
+        ),
+        Some(30) => format!(
+            "Couldn't {context} in {} — that drive is mounted read-only, and the test has to write a \
+             temporary file. Remount the drive read-write to test it. {detail}",
+            path.display()
+        ),
+        Some(2) => format!(
+            "Couldn't {context} in {} — that folder isn't there anymore. The drive may have been unplugged \
+             or unmounted; plug it back in, re-run the profile, and pick it again. {detail}",
+            path.display()
+        ),
+        _ => format!("Couldn't {context} in {}: {e}", path.display()),
+    }
+}
+
 /// Disk test with the size chosen from the volume's actual free space:
 /// the preferred 1 GiB when there's room, a smaller file (with a note
 /// in the result) when there isn't, and a plain refusal only when no
-/// tier fits at all. The temp file lands on the target volume and is
-/// removed on every path (TempGuard).
+/// tier fits at all. The temp file lands on the target volume (in the
+/// resolved test dir) and is removed on every path (TempGuard).
 pub fn disk_speed_test_auto(dir: &Path, progress: impl FnMut(&str, f64)) -> Result<DiskSpeed, String> {
-    let size = match free_bytes(dir) {
+    let test_dir = resolve_test_dir(dir)?;
+    let size = match free_bytes(&test_dir) {
         Some(free) => pick_size_mb(free).ok_or_else(|| {
             format!(
                 "Not enough free space on {} for a speed test — even a small test file needs about 128 MB free.",
@@ -61,7 +172,7 @@ pub fn disk_speed_test_auto(dir: &Path, progress: impl FnMut(&str, f64)) -> Resu
         })?,
         None => 256,
     };
-    let mut r = disk_speed_test_p(dir, size, progress)?;
+    let mut r = run_disk_test(dir, &test_dir, size, progress)?;
     if size < PREFERRED_SIZE_MB {
         let shrink = format!("Test file shrunk to {size} MB — free space on this drive is tight.");
         r.note = Some(match r.note.take() {
@@ -94,18 +205,29 @@ pub fn disk_speed_test(dir: &Path, size_mb: u64) -> Result<DiskSpeed, String> {
     disk_speed_test_p(dir, size_mb, |_, _| {})
 }
 
-pub fn disk_speed_test_p(dir: &Path, size_mb: u64, mut progress: impl FnMut(&str, f64)) -> Result<DiskSpeed, String> {
+pub fn disk_speed_test_p(dir: &Path, size_mb: u64, progress: impl FnMut(&str, f64)) -> Result<DiskSpeed, String> {
+    let test_dir = resolve_test_dir(dir)?;
+    run_disk_test(dir, &test_dir, size_mb, progress)
+}
+
+/// The test itself: writes + reads the temp file in `test_dir` (a
+/// directory on the same filesystem as the picked volume `mount`,
+/// resolved by resolve_test_dir) and reports against `mount`.
+fn run_disk_test(mount: &Path, test_dir: &Path, size_mb: u64, mut progress: impl FnMut(&str, f64)) -> Result<DiskSpeed, String> {
     use std::os::unix::fs::OpenOptionsExt;
     let size = size_mb.clamp(64, 4096);
     let total = size * 1024 * 1024;
     // Safety floor only — choosing a size that fits with real headroom
     // is disk_speed_test_auto's job (pick_size_mb).
-    if let Some(free) = free_bytes(dir) {
+    if let Some(free) = free_bytes(test_dir) {
         if free < total + 64 * 1024 * 1024 {
-            return Err(format!("not enough free space on {} (need test file + 64 MiB margin)", dir.display()));
+            return Err(format!(
+                "Not enough free space on {} for a speed test — the test file plus a 64 MB safety margin has to fit. Free some space on this drive and try again.",
+                mount.display()
+            ));
         }
     }
-    let path = dir.join(format!(".lsp-speedtest-{}.tmp", std::process::id()));
+    let path = test_dir.join(format!(".lsp-speedtest-{}.tmp", std::process::id()));
     let _guard = TempGuard(path.clone());
     let chunk = 1024 * 1024usize;
     // 4096-aligned 1 MiB buffer for O_DIRECT, RAII-owned (v0.6): the old
@@ -124,32 +246,32 @@ pub fn disk_speed_test_p(dir: &Path, size_mb: u64, mut progress: impl FnMut(&str
             Ok(f) => (f, true),
             Err(_) => (
                 std::fs::OpenOptions::new().write(true).create(true).truncate(true)
-                    .open(&path).map_err(|e| format!("open: {e}"))?,
+                    .open(&path).map_err(|e| plain_io_error("create the test file", &path, &e))?,
                 false,
             ),
         };
         let t0 = Instant::now();
         let mut written = 0u64;
         while written < total {
-            f.write_all(abuf.as_slice()).map_err(|e| format!("write: {e}"))?; written += chunk as u64;
+            f.write_all(abuf.as_slice()).map_err(|e| plain_io_error("write the test file", &path, &e))?; written += chunk as u64;
             let el = t0.elapsed().as_secs_f64();
             if el > 0.0 { progress("write", (written as f64 / 1_000_000.0) / el); }
         }
-        f.sync_all().map_err(|e| format!("sync: {e}"))?;
+        f.sync_all().map_err(|e| plain_io_error("finish writing the test file", &path, &e))?;
         let write_s = t0.elapsed().as_secs_f64();
         drop(f);
         let mut f = if direct {
             std::fs::OpenOptions::new().read(true)
-                .custom_flags(libc::O_DIRECT).open(&path).map_err(|e| format!("open read: {e}"))?
+                .custom_flags(libc::O_DIRECT).open(&path).map_err(|e| plain_io_error("read the test file back", &path, &e))?
         } else {
             std::fs::OpenOptions::new().read(true)
-                .open(&path).map_err(|e| format!("open read: {e}"))?
+                .open(&path).map_err(|e| plain_io_error("read the test file back", &path, &e))?
         };
         let mut rbuf: &mut [u8] = abuf.as_mut_slice();
         let t1 = Instant::now();
         let mut read_total = 0u64;
         loop {
-            let n = f.read(&mut rbuf).map_err(|e| format!("read: {e}"))?;
+            let n = f.read(&mut rbuf).map_err(|e| plain_io_error("read the test file", &path, &e))?;
             if n == 0 { break; }
             read_total += n as u64;
             let el = t1.elapsed().as_secs_f64();
@@ -157,12 +279,27 @@ pub fn disk_speed_test_p(dir: &Path, size_mb: u64, mut progress: impl FnMut(&str
             if read_total >= total { break; }
         }
         let read_s = t1.elapsed().as_secs_f64();
-        Ok(DiskSpeed { path: dir.display().to_string(), device: None, size_mb: size,
+        // Honest notes: buffered-I/O flattery, and a test file that had
+        // to run from a stand-in folder because the mount root itself
+        // isn't user-writable (still the same drive — same filesystem).
+        let mut notes: Vec<String> = Vec::new();
+        if !direct {
+            notes.push("Direct I/O isn't available on this filesystem — numbers may be flattered by the page cache.".into());
+        }
+        let fell_back = test_dir != mount;
+        if fell_back {
+            notes.push(format!(
+                "The test file ran from {} — the top of this drive isn't writable by your account. \
+                 That folder is on the same drive, so these numbers still measure this drive.",
+                test_dir.display()
+            ));
+        }
+        Ok(DiskSpeed { path: mount.display().to_string(),
+            test_dir: if fell_back { Some(test_dir.display().to_string()) } else { None },
+            device: None, size_mb: size,
             write_mbps: (total as f64 / 1_000_000.0) / write_s,
             read_mbps: (total as f64 / 1_000_000.0) / read_s,
-            note: if direct { None } else {
-                Some("Direct I/O isn't available on this filesystem — numbers may be flattered by the page cache.".into())
-            } })
+            note: if notes.is_empty() { None } else { Some(notes.join(" ")) } })
     })();
     result
 }
@@ -255,6 +392,38 @@ mod tests {
         assert_eq!(pick_size_mb(128 * MIB), Some(64));
         assert_eq!(pick_size_mb(127 * MIB), None); // nothing fits honestly
         assert_eq!(pick_size_mb(0), None);
+    }
+
+    #[test]
+    fn probe_and_resolve_on_writable_dir() {
+        let dir = std::env::temp_dir();
+        assert!(probe_writable(&dir), "temp dir must probe writable");
+        assert!(!probe_writable(Path::new("/definitely/not/a/real/dir")));
+        // A writable mount root is used as-is — no fallback.
+        let r = resolve_test_dir(&dir).expect("temp dir resolves");
+        assert_eq!(r, dir);
+    }
+
+    #[test]
+    fn plain_errors_speak_plainly() {
+        let p = Path::new("/some/drive");
+        let eacces = plain_io_error("create the test file", p, &std::io::Error::from_raw_os_error(13));
+        assert!(eacces.contains("permission denied"), "{eacces}");
+        assert!(eacces.contains("your account") || eacces.contains("Your user account"), "{eacces}");
+        assert!(!eacces.starts_with("open:"), "never the raw os error: {eacces}");
+        assert!(eacces.contains("Technical detail"), "{eacces}");
+        let enospc = plain_io_error("write the test file", p, &std::io::Error::from_raw_os_error(28));
+        assert!(enospc.contains("ran out of room"), "{enospc}");
+        let erofs = plain_io_error("create the test file", p, &std::io::Error::from_raw_os_error(30));
+        assert!(erofs.contains("read-only"), "{erofs}");
+        let enoent = plain_io_error("create the test file", p, &std::io::Error::from_raw_os_error(2));
+        assert!(enoent.contains("isn't there anymore"), "{enoent}");
+    }
+
+    #[test]
+    fn resolve_rejects_a_vanished_mount() {
+        let err = resolve_test_dir(Path::new("/definitely/not/a/real/dir")).unwrap_err();
+        assert!(err.contains("isn't available anymore"), "{err}");
     }
 
     #[test]

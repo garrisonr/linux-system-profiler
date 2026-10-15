@@ -114,6 +114,7 @@ pub fn collect_profile_with_progress(
     p.graphics = collect!("graphics", Vec<model::GpuInfo>, collectors::collect_graphics());
     p.displays = collect!("displays", Vec<model::DisplayInfo>, collectors::collect_displays());
     p.volumes = collect!("volumes", Vec<model::VolumeInfo>, collectors::collect_volumes());
+    p.disk_partitions = collect!("disk_partitions", Vec<model::DiskPartition>, collectors::collect_disk_partitions());
     p.printers = collect!("printers", Vec<model::PrinterInfo>, collectors::collect_printers());
     p.bluetooth = collect!("bluetooth", Vec<model::PairedDevice>, collectors::collect_bluetooth());
     p.accounts = collect!("accounts", Vec<model::UserAccount>, collectors::collect_accounts());

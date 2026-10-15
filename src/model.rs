@@ -12,6 +12,12 @@ pub struct Profile {
     pub memory: MemoryInfo,
     pub storage: Vec<StorageDevice>,
     pub volumes: Vec<VolumeInfo>,
+    /// Every partition on every fixed disk (lsblk), mounted or not —
+    /// `volumes` only knows mounted filesystems, so an unmounted
+    /// partition (a rescue install on eMMC, a Windows drive) was
+    /// invisible everywhere, including the disk speed test picker.
+    #[serde(default)]
+    pub disk_partitions: Vec<DiskPartition>,
     pub network: Vec<NetworkInterface>,
     pub graphics: Vec<GpuInfo>,
     pub displays: Vec<DisplayInfo>,
@@ -203,6 +209,30 @@ pub struct VolumeInfo {
     /// test picker lists these but disables them — it needs to write.
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// One partition (or partition-like child: LVM LV, LUKS/dm device) of a
+/// fixed disk, from lsblk — whether or not it is mounted. `mount` is
+/// None for unmounted partitions, which the UI must show honestly
+/// ("Not mounted") rather than hide.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiskPartition {
+    /// /dev/mmcblk0p2
+    pub device: String,
+    /// Parent disk (/dev/mmcblk0), when known.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// Parent disk's model string ("Desk SSD"), when the disk reports one.
+    #[serde(default)]
+    pub disk_model: Option<String>,
+    /// Parent disk's transport: nvme | sata | usb | mmc | virtio …
+    #[serde(default)]
+    pub tran: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub fs_type: Option<String>,
+    /// Mount point when mounted; None when not mounted.
+    #[serde(default)]
+    pub mount: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

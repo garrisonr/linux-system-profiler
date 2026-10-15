@@ -423,9 +423,16 @@ const VIEWS = {
     }
     const volOpts = (p.volumes || []).map((v) =>
       `<option value="${esc(v.mount)}"${v.read_only ? " disabled" : ""}${v.mount === "/" ? " selected" : ""}>${esc(v.device || "device")} · ${esc(v.mount)} · ${esc(v.fs_type)} · ${gb(v.avail_bytes)} free${v.read_only ? " · read-only" : ""}</option>`).join("");
+    // Unmounted partitions (enumerated via lsblk) are listed too —
+    // disabled, with their state spelled out. Before v0.8.6 they were
+    // simply invisible here: an unmounted eMMC rescue install did not
+    // exist as far as this picker was concerned.
+    const unmountedOpts = (p.disk_partitions || []).filter((d) => !d.mount).map((d) =>
+      `<option disabled>${esc(d.device)} · ${gb(d.size_bytes)}${d.fs_type ? " · " + esc(d.fs_type) : ""} · ${d.fs_type ? "Not mounted — mount this drive to run a test" : "No filesystem — nothing to test until it's formatted"}</option>`).join("");
+    const allOpts = volOpts + unmountedOpts;
     h += `<div class="card gauge-card"><h3>Disk speed test</h3>
-      <p>Sequential write + read on the drive you pick — the test file lands on that drive and is deleted after. Direct I/O where the filesystem allows it; if free space is tight, the test file shrinks and the result says so.</p>
-      ${volOpts ? `<div class="row"><label>Drive&nbsp; <select class="vol-select" data-disk-volume>${volOpts}</select></label></div>` : ""}
+      <p>Sequential write + read on the drive you pick — the test file lands on that drive and is deleted after. Direct I/O where the filesystem allows it; if free space is tight, the test file shrinks and the result says so. Drives that aren't mounted are listed with their state — mount one to test it.</p>
+      ${allOpts ? `<div class="row"><label>Drive&nbsp; <select class="vol-select" data-disk-volume>${allOpts}</select></label></div>` : ""}
       <div class="gauge" data-gauge="disk">${gaugeMarkup(2000, "MB/s")}</div>
       <div class="row"><button class="pill primary" data-speed="disk" type="button">Run disk test</button>
       <span class="speed-final"></span></div></div>`;
@@ -964,7 +971,17 @@ async function runSpeed(btn) {
     }
   } catch (e) {
     gaugeEls.forEach((el) => { labelFor(el).textContent = "Failed"; });
-    finalEl.textContent = String(e);
+    // A failed test explains itself in plain language (backend's job)
+    // and carries a Copy button (standing law: an error you can't
+    // copy is an error you can't report).
+    const msg = String(e);
+    finalEl.innerHTML = `${esc(msg)} <button class="pill mini" type="button" data-copy-speed-error>Copy</button>`;
+    const copyBtn = finalEl.querySelector("[data-copy-speed-error]");
+    if (copyBtn) copyBtn.addEventListener("click", async () => {
+      const ok = await invoke("copy_text", { text: msg }).catch(() => false);
+      copyBtn.textContent = ok ? "Copied" : "Couldn't copy";
+      setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
+    });
   }
   if (unlisten) unlisten();
   btn.disabled = false;
