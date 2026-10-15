@@ -359,8 +359,11 @@ const VIEWS = {
           `</div>`;
       }
     }
+    const volOpts = (p.volumes || []).map((v) =>
+      `<option value="${esc(v.mount)}"${v.read_only ? " disabled" : ""}${v.mount === "/" ? " selected" : ""}>${esc(v.device || "device")} · ${esc(v.mount)} · ${esc(v.fs_type)} · ${gb(v.avail_bytes)} free${v.read_only ? " · read-only" : ""}</option>`).join("");
     h += `<div class="card gauge-card"><h3>Disk speed test</h3>
-      <p>Sequential write + read, direct I/O (no cache flattery), 256 MiB test file in your home folder — deleted after.</p>
+      <p>Sequential write + read on the drive you pick — the test file lands on that drive and is deleted after. Direct I/O where the filesystem allows it; if free space is tight, the test file shrinks and the result says so.</p>
+      ${volOpts ? `<div class="row"><label>Drive&nbsp; <select class="vol-select" data-disk-volume>${volOpts}</select></label></div>` : ""}
       <div class="gauge" data-gauge="disk">${gaugeMarkup(2000, "MB/s")}</div>
       <div class="row"><button class="pill primary" data-speed="disk" type="button">Run disk test</button>
       <span class="speed-final"></span></div></div>`;
@@ -525,7 +528,9 @@ const VIEWS = {
     const group = (title, items, key, danger) =>
       `<div class="card"><h3>${esc(title)} — ${items.length} available</h3>` +
       (items.length
-        ? items.slice(0, 60).map((u) => `<p class="mono">${esc(u.name)} ${esc(u.current)} → ${esc(u.available)}</p>`).join("") +
+        ? items.slice(0, 60).map((u) => u.note
+          ? `<p class="mono">${esc(u.name)} <span class="chip">${esc(u.note)}</span></p>`
+          : `<p class="mono">${esc(u.name)} ${esc(u.current)} → ${esc(u.available)}</p>`).join("") +
           `<div class="row"><button class="pill ${danger ? "danger" : "primary"}" data-apply="${key}" type="button">Apply ${esc(title)} updates</button></div>`
         : `<p>Up to date.</p>`) + `</div>`;
     const sysKey = { pacman: "system-arch", apt: "system-apt", dnf: "system-dnf" }[
@@ -817,10 +822,16 @@ async function applyGroup(group) {
     });
   } catch (err) { /* events unavailable: final output still arrives at the end */ }
   try {
-    await invoke("apply_updates", { group });
-    logMeta.headline = "Finished — this group is fully up to date.";
-    $("logTitle").textContent = `${label[0].toUpperCase() + label.slice(1)} updates complete`;
+    const report = await invoke("apply_updates", { group });
+    /* The headline comes from the backend's POST-APPLY RE-CHECK, never
+       from the apply's exit code: v0.8.3 hard-coded "fully up to date"
+       here and lied when apt deferred everything to phasing. */
+    logMeta.headline = report.headline;
+    $("logTitle").textContent = report.remaining === 0
+      ? `${label[0].toUpperCase() + label.slice(1)} updates complete`
+      : `${label[0].toUpperCase() + label.slice(1)} updates finished`;
     $("logStatus").textContent = logMeta.headline;
+    if (!$("logBody").textContent && report.output) $("logBody").textContent = report.output;
   } catch (e) {
     /* The backend error is composed: plain-language headline first, raw
        output behind a Details divider. REPLACE the body with it — the
@@ -867,11 +878,14 @@ async function runSpeed(btn) {
   } catch (e) { /* no live needle; final numbers still land */ }
   try {
     if (kind === "disk") {
-      const r = await invoke("run_disk_test");
+      const sel = card.querySelector("[data-disk-volume]");
+      const r = await invoke("run_disk_test", { mount: sel ? sel.value : null });
       const el = gaugeEls[0];
       gaugeSet(el, r.read_mbps);
       labelFor(el).textContent = "Done";
-      finalEl.innerHTML = `<strong>Write ${r.write_mbps.toFixed(0)} MB/s · Read ${r.read_mbps.toFixed(0)} MB/s</strong>`;
+      finalEl.innerHTML = `<strong>Write ${r.write_mbps.toFixed(0)} MB/s · Read ${r.read_mbps.toFixed(0)} MB/s</strong>` +
+        `<br>${esc(r.device || "drive")} at ${esc(r.path)} · ${r.size_mb} MB test file` +
+        (r.note ? `<br>${esc(r.note)}` : "");
     } else {
       const r = await invoke("run_network_test");
       gaugeSet(gaugeFor("download"), r.download_mbps);

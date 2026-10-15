@@ -29,10 +29,16 @@ fn main() -> ExitCode {
             "--resume" => resume = true,
             "--no-deps" => auto_deps = false,
             "--disk-test" => {
-                let dir = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                println!("Running disk speed test in {dir} (256 MiB, O_DIRECT) ...");
-                match linux_system_profiler::speedtest::disk_speed_test(std::path::Path::new(&dir), 256) {
-                    Ok(r) => println!("Write: {:.0} MB/s · Read: {:.0} MB/s ({} MiB test file)", r.write_mbps, r.read_mbps, r.size_mb),
+                // Optional directory argument: test the volume it lives
+                // on (auto-sized; same code path as the GUI's picker).
+                let dir = args.get(i + 1).filter(|a| !a.starts_with("--")).cloned()
+                    .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+                println!("Running disk speed test in {dir} (auto size) ...");
+                match linux_system_profiler::speedtest::disk_speed_test_auto(std::path::Path::new(&dir), |_, _| {}) {
+                    Ok(r) => {
+                        println!("Write: {:.0} MB/s · Read: {:.0} MB/s ({} MiB test file)", r.write_mbps, r.read_mbps, r.size_mb);
+                        if let Some(n) = r.note { println!("Note: {n}"); }
+                    }
                     Err(e) => println!("Disk test failed: {e}"),
                 }
                 return ExitCode::SUCCESS;

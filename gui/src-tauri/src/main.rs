@@ -324,13 +324,33 @@ fn share_email(cache: State<ProfileCache>) -> Result<(), String> {
 struct SpeedProgress { test: String, phase: String, value: f64 }
 
 #[tauri::command]
-async fn run_disk_test(app: tauri::AppHandle) -> Result<DiskSpeed, String> {
-    let dir = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+async fn run_disk_test(app: tauri::AppHandle, mount: Option<String>) -> Result<DiskSpeed, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        speedtest::disk_speed_test_p(std::path::Path::new(&dir), 256, |phase, value| {
+        // A picked volume is validated against a FRESH volume list: it
+        // must still be mounted, and writable — the picker disables
+        // read-only mounts, and this is the backstop if one slips
+        // through (or the drive was unplugged since the profile loaded).
+        let (dir, device) = match &mount {
+            Some(m) => {
+                let vols = linux_system_profiler::collectors::collect_volumes();
+                let v = vols.iter().find(|v| &v.mount == m)
+                    .ok_or_else(|| "That drive is no longer mounted.".to_string())?;
+                if v.read_only {
+                    return Err(format!(
+                        "{} is mounted read-only — the speed test needs to write a temporary file there.",
+                        v.mount
+                    ));
+                }
+                (m.clone(), v.device.clone())
+            }
+            None => (std::env::var("HOME").unwrap_or_else(|_| ".".into()), None),
+        };
+        let mut r = speedtest::disk_speed_test_auto(std::path::Path::new(&dir), |phase, value| {
             let _ = app.emit("speed-progress", SpeedProgress {
                 test: "disk".into(), phase: phase.into(), value });
-        })
+        })?;
+        r.device = device;
+        Ok(r)
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -396,7 +416,7 @@ static APPLYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 /// responding), streams each output line to the frontend as it happens, and
 /// refuses to start a second run while one is in flight.
 #[tauri::command]
-async fn apply_updates(app: tauri::AppHandle, group: String) -> Result<String, String> {
+async fn apply_updates(app: tauri::AppHandle, group: String) -> Result<linux_system_profiler::updates::ApplyReport, String> {
     use std::sync::atomic::Ordering;
     if APPLYING.swap(true, Ordering::SeqCst) {
         return Err("An update is already running — wait for it to finish.".to_string());
@@ -409,7 +429,21 @@ async fn apply_updates(app: tauri::AppHandle, group: String) -> Result<String, S
     }
 }
 
-fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
+/// The truth about an apply comes from RE-CHECKING the group, never
+/// from the exit code: v0.8.3 declared "fully up to date" on exit 0
+/// while apt had deferred every package to Ubuntu phasing and
+/// installed nothing.
+fn ok_report(group: &str, output: String) -> linux_system_profiler::updates::ApplyReport {
+    let info = linux_system_profiler::updates::collect_updates();
+    let items = match group {
+        "firmware" => &info.firmware_updates,
+        "flatpak" => &info.flatpak_updates,
+        _ => &info.system_updates,
+    };
+    linux_system_profiler::updates::apply_report(output, items)
+}
+
+fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<linux_system_profiler::updates::ApplyReport, String> {
     use linux_system_profiler::elevate;
     // v0.6: distro-aware apply; the command table lives in the core
     // (updates::apply_command) where tests pin the safety contract — no
@@ -424,7 +458,7 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
         let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let (code, full) = run_apply_stream(app, prog, &a)?;
         return if code == Some(0) {
-            Ok(full)
+            Ok(ok_report(group, full))
         } else {
             Err(elevate::failure_text(&full, code))
         };
@@ -437,7 +471,7 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
     let (rprog, rargs) = elevate::run_command(&a);
     let (code, full) = run_apply_stream(app, &rprog, &rargs)?;
     if code == Some(0) {
-        return Ok(full);
+        return Ok(ok_report(group, full));
     }
     // Self-heal: if no agent answered, start the graphical agent into OUR
     // session and retry once with a direct pkexec (caller and agent then
@@ -447,7 +481,7 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
     if elevate::should_heal(elevate::classify(&full, code), false) && elevate::try_start_agent() {
         let (code2, full2) = run_apply_stream(app, "pkexec", &a)?;
         if code2 == Some(0) {
-            return Ok(full2);
+            return Ok(ok_report(group, full2));
         }
         return Err(elevate::failure_text(&full2, code2));
     }

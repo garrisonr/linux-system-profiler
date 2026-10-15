@@ -64,7 +64,12 @@ button { font: inherit; }
 .tree button[aria-current="page"] { background: var(--accent); color: #fff; }
 .tree .count { margin-left: auto; font-size: .75rem; color: inherit; opacity: .75; }
 .sidebar-foot { padding: .625rem; display: flex; flex-direction: column; gap: .5rem; border-top: 1px solid var(--line); }
-.sidebar-foot .pill { flex: 1; }
+/* Footer buttons span the full column width, so their labels align to
+   the sidebar's one left edge — foot padding (.625rem) + label inset
+   (.5rem) = 1.125rem, exactly where the theme dropdown's label and the
+   nav items' labels sit. (Dickles QA 2026-10-14: the centered Refresh /
+   Copy & Share labels broke the column's alignment system.) */
+.sidebar-foot .pill { flex: 1; justify-content: flex-start; padding-left: .5rem; }
 
 .detail { overflow-y: auto; overflow-x: hidden; min-width: 0; padding: 0 1.25rem 1.25rem; }
 .detail-body { min-width: 0; }
@@ -154,6 +159,11 @@ table.kv th { width: 38%; color: var(--ink-2); font-weight: 500; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .chip { display: inline-block; padding: .05rem .45rem; border: 1px solid var(--line); border-radius: 999px;
   font-size: .6875rem; font-weight: 600; color: var(--ink-2); vertical-align: .1rem; }
+/* Disk-test drive picker: a native select wearing the control family's
+   geometry (same height/radius/border as the pills and dropdown). */
+.vol-select { height: var(--control-h); max-width: 100%; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--paper); color: var(--ink);
+  padding: 0 .5rem; font: inherit; font-size: .875rem; font-weight: 500; cursor: pointer; }
 .export-text { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: .75rem;
   border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); color: var(--ink); padding: .5rem; }
 .sheet .row { display: flex; gap: .5rem; margin-top: .625rem; }

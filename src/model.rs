@@ -199,6 +199,10 @@ pub struct VolumeInfo {
     pub used_bytes: Option<u64>,
     pub avail_bytes: Option<u64>,
     pub use_percent: Option<u32>,
+    /// Mounted read-only (from /proc/mounts options). The disk speed
+    /// test picker lists these but disables them — it needs to write.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -286,6 +290,11 @@ pub struct UpdateItem {
     pub current: Option<String>,
     pub available: Option<String>,
     pub source: String,
+    /// Plain-language state the row must show instead of bare version
+    /// cells — e.g. an apt update Ubuntu is holding back in its phased
+    /// rollout. Set at check time from the package manager's own words.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

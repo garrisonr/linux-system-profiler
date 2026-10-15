@@ -52,6 +52,97 @@ fn metadata_refresh_command_for(pm: Option<&str>) -> Option<(String, Vec<String>
     Some((elevate.to_string(), vec!["apt-get".into(), "update".into()]))
 }
 
+/// Package names apt says it deferred due to Ubuntu's phased rollout.
+/// apt prints them either after the colon on the marker line or on the
+/// following indented line(s):
+///   The following upgrades have been deferred due to phasing:
+///     apparmor libapparmor1
+/// Both layouts are parsed. (v0.8.3 shipped a dialog that called such a
+/// run "fully up to date" — the apply had installed nothing.)
+pub fn parse_phased_deferred(output: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_block = false;
+    for line in output.lines() {
+        if line.contains("deferred due to phasing") {
+            in_block = true;
+            if let Some(tail) = line.rsplit(':').next() {
+                if tail != line {
+                    out.extend(tail.split_whitespace().map(|s| s.to_string()));
+                }
+            }
+            continue;
+        }
+        if in_block {
+            if line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
+                out.extend(line.split_whitespace().map(|s| s.to_string()));
+            } else {
+                in_block = false;
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// What an apply actually achieved, established by RE-CHECKING the group
+/// afterwards — never by the apply's exit code alone. v0.8.3 trusted
+/// exit 0 and declared "fully up to date" while apt had deferred every
+/// package to phasing and installed nothing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ApplyReport {
+    /// The apply's full raw output (the dialog's details / copy body).
+    pub output: String,
+    /// Items the post-apply re-check still lists for this group.
+    pub remaining: usize,
+    /// Remaining items held back by Ubuntu phasing, by name.
+    pub deferred: Vec<String>,
+    /// The plain-language headline the dialog leads with.
+    pub headline: String,
+}
+
+/// Compose the report from the apply output and the RE-CHECKED group
+/// items. Deferred names come from the items' check-time phasing notes,
+/// unioned with names parsed from the apply output itself (both filtered
+/// to items that actually remain).
+pub fn apply_report(output: String, remaining_items: &[UpdateItem]) -> ApplyReport {
+    let from_output = parse_phased_deferred(&output);
+    let deferred: Vec<String> = remaining_items
+        .iter()
+        .filter(|i| i.note.is_some() || from_output.contains(&i.name))
+        .map(|i| i.name.clone())
+        .collect();
+    let remaining = remaining_items.len();
+    let headline = if remaining == 0 {
+        "Finished — this group is fully up to date.".to_string()
+    } else if deferred.len() == remaining {
+        format!(
+            "Finished — but {} update{} not installed yet: Ubuntu releases some updates in phases, and {} {} been released to this machine yet. {} install on a later check, once Ubuntu releases {} to you.",
+            remaining,
+            if remaining == 1 { " was" } else { "s were" },
+            deferred.join(", "),
+            if remaining == 1 { "hasn't" } else { "haven't" },
+            if remaining == 1 { "It will" } else { "They'll" },
+            if remaining == 1 { "it" } else { "them" },
+        )
+    } else if !deferred.is_empty() {
+        format!(
+            "Finished — {} update{} still remain. {} of them ({}) are being held back by Ubuntu's phased rollout and will install on a later check; the output below shows the rest.",
+            remaining,
+            if remaining == 1 { "" } else { "s" },
+            deferred.len(),
+            deferred.join(", "),
+        )
+    } else {
+        format!(
+            "Finished — {} update{} still remain. The output below shows what happened.",
+            remaining,
+            if remaining == 1 { "" } else { "s" },
+        )
+    };
+    ApplyReport { output, remaining, deferred, headline }
+}
+
 pub fn collect_updates() -> UpdatesInfo {
     let mut info = UpdatesInfo { checked: true, ..Default::default() };
 
@@ -66,7 +157,7 @@ pub fn collect_updates() -> UpdatesInfo {
                 let name = it.next().unwrap_or("").to_string();
                 let cur = it.next().map(|s| s.to_string());
                 let avail = if line.contains("->") { line.split("->").nth(1).map(|s| s.trim().to_string()) } else { None };
-                if !name.is_empty() { info.system_updates.push(UpdateItem { name, current: cur, available: avail, source: "pacman".into() }); }
+                if !name.is_empty() { info.system_updates.push(UpdateItem { name, current: cur, available: avail, source: "pacman".into(), note: None }); }
             },
             None => info.notes.push("pacman -Qu returned nothing (up to date, or checkupdates not run)".into()),
         }
@@ -75,13 +166,28 @@ pub fn collect_updates() -> UpdatesInfo {
         if let Some(out) = cmd("apt", &["list", "--upgradable"]) {
             for line in out.lines().skip(1) {
                 let name = line.split('/').next().unwrap_or("").to_string();
-                if !name.is_empty() { info.system_updates.push(UpdateItem { name, current: None, available: None, source: "apt".into() }); }
+                if !name.is_empty() { info.system_updates.push(UpdateItem { name, current: None, available: None, source: "apt".into(), note: None }); }
+            }
+        }
+        // Ubuntu phased rollouts: `apt list --upgradable` lists packages
+        // apt will REFUSE to install yet ("deferred due to phasing" in a
+        // simulated upgrade). Mark them at check time so the row tells
+        // the truth instead of showing bare version cells, and so a
+        // post-apply re-check can name them. Simulation is read-only.
+        if let Some(sim) = cmd("apt-get", &["-s", "upgrade"]) {
+            let deferred = parse_phased_deferred(&sim);
+            if !deferred.is_empty() {
+                for item in &mut info.system_updates {
+                    if deferred.contains(&item.name) {
+                        item.note = Some("Deferred by Ubuntu phasing — not yet released to this machine".into());
+                    }
+                }
             }
         }
     } else if which("dnf") {
         if let Some(out) = cmd("dnf", &["check-update", "--quiet"]) {
             for line in out.lines() { let n = line.split_whitespace().next().unwrap_or("");
-                if !n.is_empty() { info.system_updates.push(UpdateItem { name: n.into(), current: None, available: None, source: "dnf".into() }); } }
+                if !n.is_empty() { info.system_updates.push(UpdateItem { name: n.into(), current: None, available: None, source: "dnf".into(), note: None }); } }
         }
     } else {
         info.notes.push("No supported package manager found for update check.".into());
@@ -100,7 +206,7 @@ pub fn collect_updates() -> UpdatesInfo {
                                     info.firmware_updates.push(UpdateItem { name: name.clone(),
                                         current: d.get("Version").and_then(|x| x.as_str()).map(|s| s.to_string()),
                                         available: r.get("Version").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                                        source: "fwupd/LVFS".into() });
+                                        source: "fwupd/LVFS".into(), note: None });
                                 }
                             }
                         }
@@ -121,7 +227,7 @@ pub fn collect_updates() -> UpdatesInfo {
                 let mut c = line.split('\t');
                 let name = c.next().unwrap_or("").to_string();
                 if !name.is_empty() { info.flatpak_updates.push(UpdateItem { name,
-                    current: None, available: c.next().map(|s| s.to_string()), source: "flatpak".into() }); }
+                    current: None, available: c.next().map(|s| s.to_string()), source: "flatpak".into(), note: None }); }
             }
         }
     }
@@ -156,6 +262,63 @@ mod tests {
         let line = args.join(" ");
         assert!(line.contains("apt-get upgrade -y"), "{line}");
         assert!(line.contains("DEBIAN_FRONTEND=noninteractive"), "{line}");
+    }
+
+    #[test]
+    fn phased_deferred_parses_both_apt_layouts() {
+        // Stock apt layout: names on the following indented line.
+        let stock = "The following upgrades have been deferred due to phasing:\n  apparmor libapparmor1\n0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.\n";
+        assert_eq!(parse_phased_deferred(stock), vec!["apparmor", "libapparmor1"]);
+        // Same-line layout (names after the colon).
+        let inline = "The following upgrades have been deferred due to phasing: apparmor libapparmor1\n";
+        assert_eq!(parse_phased_deferred(inline), vec!["apparmor", "libapparmor1"]);
+        // Wrapped across two indented lines, and no phasing at all.
+        let wrapped = "The following upgrades have been deferred due to phasing:\n  aaa bbb\n  ccc\n2 upgraded.\n";
+        assert_eq!(parse_phased_deferred(wrapped), vec!["aaa", "bbb", "ccc"]);
+        assert!(parse_phased_deferred("5 upgraded, 0 newly installed.\n").is_empty());
+    }
+
+    fn item(name: &str, note: Option<&str>) -> UpdateItem {
+        UpdateItem { name: name.into(), current: None, available: None,
+            source: "apt".into(), note: note.map(|s| s.to_string()) }
+    }
+
+    #[test]
+    fn apply_report_never_claims_up_to_date_with_remainder() {
+        // The v0.8.3 lie: exit 0, everything deferred, headline claimed
+        // "fully up to date". The re-check drives the headline now.
+        let out = "The following upgrades have been deferred due to phasing:\n  apparmor libapparmor1\n0 upgraded.\n".to_string();
+        let remaining = vec![
+            item("apparmor", Some("Deferred by Ubuntu phasing — not yet released to this machine")),
+            item("libapparmor1", Some("Deferred by Ubuntu phasing — not yet released to this machine")),
+        ];
+        let r = apply_report(out, &remaining);
+        assert_eq!(r.remaining, 2);
+        assert_eq!(r.deferred, vec!["apparmor", "libapparmor1"]);
+        assert!(r.headline.contains("phases"), "{}", r.headline);
+        assert!(r.headline.contains("apparmor"), "{}", r.headline);
+        assert!(!r.headline.contains("fully up to date"), "{}", r.headline);
+    }
+
+    #[test]
+    fn apply_report_zero_remaining_is_the_only_up_to_date() {
+        let r = apply_report("3 upgraded.\n".into(), &[]);
+        assert_eq!(r.remaining, 0);
+        assert!(r.headline.contains("fully up to date"));
+        // Remaining for an unparsed reason: honest remainder, no phasing story.
+        let r2 = apply_report("done\n".into(), &[item("kept-back-pkg", None)]);
+        assert_eq!(r2.remaining, 1);
+        assert!(r2.deferred.is_empty());
+        assert!(r2.headline.contains("still remain"), "{}", r2.headline);
+        assert!(!r2.headline.contains("fully up to date"));
+        // Mixed: one phased, one other.
+        let r3 = apply_report("done\n".into(), &[
+            item("phased-pkg", Some("Deferred by Ubuntu phasing — not yet released to this machine")),
+            item("other-pkg", None),
+        ]);
+        assert_eq!(r3.deferred, vec!["phased-pkg"]);
+        assert!(r3.headline.contains("still remain"), "{}", r3.headline);
+        assert!(r3.headline.contains("phased rollout"), "{}", r3.headline);
     }
 
     #[test]

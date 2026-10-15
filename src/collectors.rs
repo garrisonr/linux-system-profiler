@@ -750,17 +750,28 @@ pub fn collect_software() -> SoftwareInfo {
 
 // ---------- v0.3: Belarc-parity collectors ----------
 
+/// True when a /proc/mounts options field mounts the filesystem
+/// read-only ("ro" as a whole option token — "relatime" etc. must not
+/// false-positive).
+pub fn mount_options_ro(opts: &str) -> bool {
+    opts.split(',').any(|o| o == "ro")
+}
+
 pub fn collect_volumes() -> Vec<VolumeInfo> {
     let mut out = Vec::new();
     let keep = ["ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs", "vfat", "exfat", "ntfs", "ntfs3"];
     let mut subvols: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut ro_map: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     if let Ok(mounts) = fs::read_to_string("/proc/mounts") {
         for line in mounts.lines() {
             let f: Vec<&str> = line.split_whitespace().collect();
             if f.len() >= 4 {
+                let mount = f[1].replace("\\040", " ");
+                let is_ro = mount_options_ro(f[3]);
+                ro_map.entry(mount.clone()).and_modify(|v| *v = *v && is_ro).or_insert(is_ro);
                 for opt in f[3].split(',') {
                     if let Some(sv) = opt.strip_prefix("subvol=") {
-                        subvols.insert(f[1].replace("\\040", " "), sv.to_string());
+                        subvols.insert(mount.clone(), sv.to_string());
                     }
                 }
             }
@@ -779,6 +790,7 @@ pub fn collect_volumes() -> Vec<VolumeInfo> {
                 device: Some(parts[0].to_string()),
                 subvolume: subvols.get(&mount).cloned(),
                 size_bytes: kb(2), used_bytes: kb(3), avail_bytes: kb(4),
+                read_only: ro_map.get(&mount).copied().unwrap_or(false),
                 use_percent: parts.get(5).and_then(|s| s.trim_end_matches('%').parse::<u32>().ok()) });
         }
     }
@@ -980,5 +992,18 @@ mod parser_tests {
         assert_eq!(classify_iface("veth1234", base).0, "Virtual Ethernet");
         assert_eq!(classify_iface("wg0", base).0, "VPN / Tunnel");
         assert_eq!(classify_iface("tailscale0", base).0, "VPN / Tunnel");
+    }
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::mount_options_ro;
+
+    #[test]
+    fn ro_is_a_whole_option_token() {
+        assert!(mount_options_ro("ro,relatime"));
+        assert!(mount_options_ro("ro"));
+        assert!(!mount_options_ro("rw,relatime"));
+        assert!(!mount_options_ro("rw,errors=remount-ro")); // substring must not trip it
     }
 }
