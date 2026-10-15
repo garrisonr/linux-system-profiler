@@ -1,5 +1,6 @@
 pub mod collectors;
 pub mod deps;
+pub mod elevate;
 pub mod model;
 pub mod report;
 pub mod speedtest;

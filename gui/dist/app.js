@@ -670,11 +670,12 @@ function renderRail() {
       miniFlag("info", `${P.software.snaps.length} snaps · ${P.software.docker_images.length} docker images`) +
       miniFlag("info", `${o(P.software.loaded_modules_count)} modules · ${o(P.software.running_services_count)} services`);
   } else if (current === "updates") {
+    /* No totals here: the detail cards on this very screen already carry
+       every count ("— N available"), and repeating them in the rail was
+       the same numbers twice in one view (Dickles, 2026-10-14). Totals
+       live on the Overview rail, where they signpost INTO this detail. */
     title.textContent = "Updates";
-    const u = P.updates;
-    h = miniFlag(u.system_updates.length ? "amber" : "green", `${u.system_updates.length} system`) +
-      miniFlag(u.firmware_updates.length ? "amber" : "green", `${u.firmware_updates.length} firmware`) +
-      miniFlag(u.flatpak_updates.length ? "amber" : "green", `${u.flatpak_updates.length} flatpak`);
+    h = miniFlag("info", `Applied per group, one at a time<span class="hint">each apply shows the password prompt first — nothing installs itself</span>`);
   } else {
     title.textContent = "About";
     h = miniFlag("info", `Version ${esc(P.tool_version)}<span class="hint">schema v${esc(P.schema_version)}</span>`);
@@ -687,7 +688,47 @@ function renderRail() {
 }
 
 /* ---------------- dialogs, toast ---------------- */
+/* What the log dialog is currently showing, for the Copy button: the
+   action attempted and the plain-language headline. The body text is
+   read live from the dialog at copy time. */
+let logMeta = { action: "", headline: "" };
+
+/* The shareable text block behind "Copy output": app + version, when,
+   what was attempted, the plain-language headline, then the full raw
+   output — formatted to paste straight into a bug report. Pure: every
+   input arrives as a parameter (verified under node with fixtures). */
+function composeOutputText(appLine, when, action, headline, body) {
+  return [
+    appLine,
+    when,
+    "Action: " + action,
+    "",
+    headline || "Completed.",
+    "",
+    "—— Output ——",
+    body && body.trim() ? body : "(no output)",
+  ].join("\n");
+}
+
+async function copyLogOutput(btn) {
+  const text = composeOutputText(
+    `Linux System Profiler v${(P && P.tool_version) || "?"}`,
+    new Date().toLocaleString(),
+    logMeta.action || $("logTitle").textContent,
+    logMeta.headline || $("logStatus").textContent,
+    $("logBody").textContent);
+  const ok = await invoke("copy_text", { text }).catch(() => false);
+  if (ok) {
+    const old = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = old; }, 1600);
+  } else {
+    showToast("Couldn't copy — select the output text and copy it manually.");
+  }
+}
+
 function showLog(title, text) {
+  logMeta = { action: title, headline: "" };
   $("logTitle").textContent = title;
   $("logBody").textContent = text;
   $("logSheet").showModal();
@@ -762,6 +803,7 @@ async function applyGroup(group) {
   if (!ok) return;
   applying = true;
   document.querySelectorAll("[data-apply]").forEach((b) => { b.disabled = true; });
+  logMeta = { action: `Apply ${label} updates`, headline: "" };
   $("logTitle").textContent = `Updating ${label}…`;
   $("logStatus").textContent = "Running — new output appears below as it happens.";
   $("logBody").textContent = "";
@@ -776,12 +818,19 @@ async function applyGroup(group) {
   } catch (err) { /* events unavailable: final output still arrives at the end */ }
   try {
     await invoke("apply_updates", { group });
+    logMeta.headline = "Finished — this group is fully up to date.";
     $("logTitle").textContent = `${label[0].toUpperCase() + label.slice(1)} updates complete`;
-    $("logStatus").textContent = "Finished — this group is fully up to date.";
+    $("logStatus").textContent = logMeta.headline;
   } catch (e) {
+    /* The backend error is composed: plain-language headline first, raw
+       output behind a Details divider. REPLACE the body with it — the
+       streamed lines are already inside the details, and v0.8.1's
+       append-on-error showed the same raw block twice. */
+    const msg = String(e);
+    logMeta.headline = msg.split("\n")[0];
     $("logTitle").textContent = "Update failed";
-    $("logStatus").textContent = "Something went wrong — the output below shows where it stopped.";
-    $("logBody").textContent += "\n" + String(e);
+    $("logStatus").textContent = logMeta.headline;
+    $("logBody").textContent = msg;
   } finally {
     if (unlisten) unlisten();
     applying = false;
@@ -998,6 +1047,7 @@ async function load() {
 $("refreshBtn").addEventListener("click", load);
 $("backBtn").addEventListener("click", () => $("app").classList.remove("show-detail"));
 $("logClose").addEventListener("click", () => $("logSheet").close());
+$("logCopy").addEventListener("click", (e) => copyLogOutput(e.currentTarget));
 $("themeBtn").addEventListener("click", () => (themePopOpen() ? closeThemePop() : openThemePop()));
 $("themeDropdown").addEventListener("keydown", themeKeyNav);
 document.addEventListener("pointerdown", (e) => {

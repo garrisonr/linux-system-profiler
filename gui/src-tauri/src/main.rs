@@ -309,11 +309,20 @@ async fn elevated_dmi() -> Result<ElevatedDmi, String> {
 }
 
 fn elevated_dmi_blocking() -> Result<ElevatedDmi, String> {
-    let out = Command::new("pkexec").args(["dmidecode"]).output()
+    // Route through the session's polkit agent like every other elevated
+    // path (elevate module) — a bare pkexec from a foreign session dies
+    // on /dev/tty (v0.8.1 hotfix). Errors surface as the classified
+    // plain-language headline only; this lands in a toast, so no raw
+    // tool output may ride along.
+    let out = linux_system_profiler::elevate::output(&["dmidecode".to_string()])
         .map_err(|e| format!("failed to launch pkexec: {e}"))?;
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if err.is_empty() { "elevation cancelled or denied".into() } else { err });
+        let raw = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        return Err(match linux_system_profiler::elevate::classify(&raw, out.status.code()) {
+            linux_system_profiler::elevate::ElevationFailure::Failed =>
+                "The admin read didn't complete — nothing was changed.".to_string(),
+            kind => kind.headline().to_string(),
+        });
     }
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     Ok(ElevatedDmi {
@@ -343,9 +352,7 @@ async fn apply_updates(app: tauri::AppHandle, group: String) -> Result<String, S
 }
 
 fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
-    use std::io::{BufRead, BufReader};
-    use std::process::Stdio;
-    use tauri::Emitter;
+    use linux_system_profiler::elevate;
     // v0.6: distro-aware apply; the command table lives in the core
     // (updates::apply_command) where tests pin the safety contract — no
     // distro path may ever dist-upgrade/full-upgrade. v0.8.0's apt arm ran
@@ -354,7 +361,51 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
     // in moved to the explicit Check (refresh_update_check).
     let (prog, args) = linux_system_profiler::updates::apply_command(group)
         .ok_or_else(|| format!("unknown update group: {group}"))?;
-    let mut child = Command::new(prog).args(&args)
+    if prog != "pkexec" {
+        // Flatpak is not elevated: single direct attempt.
+        let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let (code, full) = run_apply_stream(app, prog, &a)?;
+        return if code == Some(0) {
+            Ok(full)
+        } else {
+            Err(elevate::failure_text(&full, code))
+        };
+    }
+    // pkexec groups route through the session's polkit agent (elevate
+    // module): from a process outside the desktop session, a bare pkexec
+    // falls back to a textual agent and dies on /dev/tty — the v0.8.1
+    // failure Dickles hit at 22:10.
+    let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let (rprog, rargs) = elevate::run_command(&a);
+    let (code, full) = run_apply_stream(app, &rprog, &rargs)?;
+    if code == Some(0) {
+        return Ok(full);
+    }
+    // Self-heal: if no agent answered, start the graphical agent into OUR
+    // session and retry once with a direct pkexec (caller and agent then
+    // share the session). Only then is the failure real — and it is
+    // reported headline-first (see the end of run_apply_stream's caller
+    // contract below).
+    if elevate::should_heal(elevate::classify(&full, code), false) && elevate::try_start_agent() {
+        let (code2, full2) = run_apply_stream(app, "pkexec", &a)?;
+        if code2 == Some(0) {
+            return Ok(full2);
+        }
+        return Err(elevate::failure_text(&full2, code2));
+    }
+    // Plain language FIRST, raw output demoted to a Details section —
+    // v0.8.1 handed the frontend pkexec's raw stderr ("/dev/tty"…) as
+    // the whole error, and the frontend then showed it twice.
+    Err(elevate::failure_text(&full, code))
+}
+
+/// One streaming attempt: spawn (prog, args), forward output lines to the
+/// frontend as they arrive, return (exit code, combined output).
+fn run_apply_stream(app: &tauri::AppHandle, prog: &str, args: &[String]) -> Result<(Option<i32>, String), String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use tauri::Emitter;
+    let mut child = Command::new(prog).args(args)
         .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
         .map_err(|e| format!("failed to launch {prog}: {e}"))?;
     let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -380,7 +431,7 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<String, String> {
     }
     for r in readers { let _ = r.join(); }
     let status = child.wait().map_err(|e| format!("update process error: {e}"))?;
-    if status.success() { Ok(full) } else { Err(full) }
+    Ok((status.code(), full))
 }
 
 /// Explicit Check from the Updates view. On apt, a check is only as fresh
@@ -393,10 +444,23 @@ async fn refresh_update_check(cache: State<'_, ProfileCache>, renders: State<'_,
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let mut refreshed = false;
         if let Some((elevate, args)) = linux_system_profiler::updates::metadata_refresh_command() {
-            let out = Command::new(&elevate).args(&args).output()
-                .map_err(|e| format!("couldn't start the package-list refresh: {e}"))?;
+            // Same session routing as apply (elevate module): the refresh
+            // elevates too, and a foreign-session pkexec dies on /dev/tty.
+            // elevate::output also self-heals (starts the graphical agent
+            // and retries once) if no agent answers.
+            let out = if elevate == "pkexec" {
+                linux_system_profiler::elevate::output(&args)
+            } else {
+                Command::new(&elevate).args(&args).output()
+            }
+            .map_err(|e| format!("couldn't start the package-list refresh: {e}"))?;
             if !out.status.success() {
-                return Err("The package-list refresh didn't complete — results may be out of date. (The password prompt may have been dismissed.)".to_string());
+                let raw = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+                return Err(match linux_system_profiler::elevate::classify(&raw, out.status.code()) {
+                    linux_system_profiler::elevate::ElevationFailure::AgentUnavailable =>
+                        linux_system_profiler::elevate::ElevationFailure::AgentUnavailable.headline().to_string(),
+                    _ => "The package-list refresh didn't complete — results may be out of date. (The password prompt may have been dismissed.)".to_string(),
+                });
             }
             refreshed = true;
         }

@@ -185,7 +185,17 @@ pub fn install_deps(st: &DepStatus) -> Result<String, InstallError> {
         detail: "No supported package manager (pacman/apt/dnf) or elevation tool (pkexec/sudo) was found.".into(),
     })?;
     let plan = format!("{} {}", elevate, args.join(" "));
-    let out = Command::new(&elevate).args(&args).output().map_err(|e| InstallError {
+    // pkexec goes through the elevate module: routed into the desktop
+    // session so its graphical agent answers (a GUI process launched
+    // outside the session otherwise gets pkexec's textual fallback and
+    // dies on /dev/tty), with a self-heal retry if no agent answers.
+    // sudo (headless) runs directly, as before.
+    let out = if elevate == "pkexec" {
+        crate::elevate::output(&args)
+    } else {
+        Command::new(&elevate).args(&args).output()
+    }
+    .map_err(|e| InstallError {
         kind: InstallErrorKind::Failed,
         message: "The install couldn't be started.".into(),
         detail: format!("failed to launch `{plan}`: {e}"),
