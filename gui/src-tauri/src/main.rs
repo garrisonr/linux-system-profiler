@@ -171,9 +171,8 @@ fn clipboard_set(text: &str) -> bool {
 /// (the v0.4 gaps memo's synchronous re-render lag, still open in v0.8.0 —
 /// Gemini audit 2026-10-14). Kinds: "sanitized" (Markdown, forum-safe),
 /// "full-md", "json".
-#[tauri::command]
-async fn share_copy(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>, kind: String) -> CopyResult {
-    let p = cached_or_collect(&cache);
+async fn share_copy_impl(cache: &State<'_, ProfileCache>, renders: &State<'_, RenderCache>, kind: String) -> CopyResult {
+    let p = cached_or_collect(cache);
     let rc = renders.0.clone();
     let kind2 = kind.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
@@ -185,7 +184,7 @@ async fn share_copy(cache: State<'_, ProfileCache>, renders: State<'_, RenderCac
     match joined {
         Ok(r) => r,
         Err(_) => {
-            let p = cached_or_collect(&cache);
+            let p = cached_or_collect(cache);
             let text = render_report(&p, &kind);
             let chars = text.chars().count();
             CopyResult { copied: clipboard_set(&text), text, chars }
@@ -193,10 +192,15 @@ async fn share_copy(cache: State<'_, ProfileCache>, renders: State<'_, RenderCac
     }
 }
 
+#[tauri::command]
+async fn share_copy(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>, kind: String) -> Result<CopyResult, String> {
+    Ok(share_copy_impl(&cache, &renders, kind).await)
+}
+
 /// Backward-compatible name used by the v0.3 frontend.
 #[tauri::command]
-async fn copy_forum(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>) -> CopyResult {
-    share_copy(cache, renders, "sanitized".into()).await
+async fn copy_forum(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>) -> Result<CopyResult, String> {
+    Ok(share_copy_impl(&cache, &renders, "sanitized".into()).await)
 }
 
 /// Copy & Share — save action. Native save dialog (rfd/GTK); writes
