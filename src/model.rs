@@ -338,17 +338,46 @@ pub struct UpdatesInfo {
     pub refreshed_this_check: bool,
 }
 
+/// Why an update can or can't install right now — classified in Rust at
+/// check time from the package manager's own simulations, never guessed
+/// in the frontend (v0.8.9, Dickles 2026-10-17: "tell me in plain english
+/// why the apps aren't installing"). Serializes as a snake_case string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateStatus {
+    /// Installable by the normal (safe) apply right now.
+    #[default]
+    Ready,
+    /// apt is keeping it back because it brings NEW companion packages
+    /// the safe upgrade may not install — a full upgrade CAN install it.
+    KeptBack,
+    /// Ubuntu's phased rollout hasn't released it to this machine yet.
+    Phased,
+    /// On hold (apt-mark hold): won't move until the hold is removed.
+    Held,
+    /// Even a full upgrade can't install it yet — something it needs
+    /// isn't available for this system (unmet dependency).
+    Blocked,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateItem {
     pub name: String,
     pub current: Option<String>,
     pub available: Option<String>,
     pub source: String,
-    /// Plain-language state the row must show instead of bare version
-    /// cells — e.g. an apt update Ubuntu is holding back in its phased
-    /// rollout. Set at check time from the package manager's own words.
+    /// Plain-language state the row shows next to the versions — e.g.
+    /// why an update is waiting. Set at check time from the package
+    /// manager's own words; None when the update is simply ready.
     #[serde(default)]
     pub note: Option<String>,
+    /// The classified state behind `note` (see UpdateStatus).
+    #[serde(default)]
+    pub status: UpdateStatus,
+    /// Phased rollout only: the percentage apt reports for the
+    /// candidate ("(phased 60%)" in `apt-cache policy`), when known.
+    #[serde(default)]
+    pub phased_percent: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -5,7 +5,7 @@
 //! user-initiated Check lives in `metadata_refresh_command` — it refreshes
 //! package indexes only, installs nothing.)
 use crate::collectors::{cmd, which};
-use crate::model::{UpdateItem, UpdatesInfo};
+use crate::model::{UpdateItem, UpdateStatus, UpdatesInfo};
 
 /// The elevated apply command for one update group, as (program, argv).
 /// Lives in the core so the exact strings are unit-testable — the safety
@@ -27,6 +27,21 @@ pub fn apply_command(group: &str) -> Option<(&'static str, Vec<&'static str>)> {
         "flatpak" => ("flatpak", vec!["update", "-y"]),
         _ => return None,
     })
+}
+
+/// The ONE full-upgrade path in the crate — deliberately NOT part of
+/// the apply_command table above. The default apply stays a safe
+/// `apt-get upgrade` forever (the v0.8.0 dist-upgrade scar: a silent
+/// full upgrade may REMOVE packages). This command exists only for the
+/// explicit "Install these too (full upgrade)" action Dickles ordered
+/// 2026-10-17, and the GUI may only reach it behind a confirmation fed
+/// by `full_upgrade_plan` — a live simulation naming every install,
+/// every removal, every package even this can't fix, and the restart a
+/// kernel in the set makes necessary. Tests pin this exact argv and
+/// pin that no apply_command group contains it.
+pub fn full_upgrade_command() -> (&'static str, Vec<&'static str>) {
+    ("pkexec", vec!["sh", "-c",
+        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y"])
 }
 
 /// Elevated command that refreshes package METADATA ONLY (installs
@@ -189,6 +204,368 @@ pub fn parse_phased_deferred(output: &str) -> Vec<String> {
     out
 }
 
+/// Names listed under an apt section header — they ride on the
+/// indented lines that follow it, wrapped as needed:
+///   The following packages have been kept back:
+///     foo bar
+///     baz
+/// Sorted + deduped for stable comparisons.
+pub fn parse_name_section(output: &str, header: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_block = false;
+    for line in output.lines() {
+        if line.trim() == header {
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            if line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
+                out.extend(line.split_whitespace().map(|s| s.to_string()));
+            } else {
+                in_block = false;
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Packages apt's SAFE upgrade refuses to touch ("kept back") — the
+/// section both simulations print when an update needs new companion
+/// packages or a removal the plain `upgrade` may not perform.
+pub fn parse_kept_back(output: &str) -> Vec<String> {
+    parse_name_section(output, "The following packages have been kept back:")
+}
+
+/// One row of `apt list --upgradable`:
+///   name/suite[,suite] available-version arch [upgradable from: current]
+/// Until v0.8.9 the collector kept only the name and threw the versions
+/// away — the check-only listing showed "None -> None" for every apt
+/// package even though apt printed both versions on the same line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradableEntry {
+    pub name: String,
+    pub current: Option<String>,
+    pub available: Option<String>,
+}
+
+pub fn parse_upgradable_list(output: &str) -> Vec<UpgradableEntry> {
+    let mut out = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("Listing") { continue; }
+        let name = line.split('/').next().unwrap_or("").to_string();
+        if name.is_empty() { continue; }
+        let mut tokens = line.split_whitespace();
+        let _ = tokens.next(); // name/suite
+        let available = tokens.next().map(|s| s.to_string());
+        let mut current = None;
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        for w in toks.windows(2) {
+            if w[0] == "from:" {
+                current = Some(w[1].trim_end_matches(']').to_string());
+            }
+        }
+        out.push(UpgradableEntry { name, current, available });
+    }
+    out
+}
+
+/// (package, percent) pairs from `apt-cache policy` output. The
+/// percentage rides on the CANDIDATE's version-table line:
+///   snapd:
+///     Candidate: 2.77.1+ubuntu24.04
+///     Version table:
+///        2.77.1+ubuntu24.04 500 (phased 60%)
+/// Captured live on the G9 (snapd, 60%) — policy is the only apt output
+/// that prints the number.
+pub fn parse_phased_percents(output: &str) -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = Vec::new();
+    let mut pkg: Option<String> = None;
+    let mut candidate: Option<String> = None;
+    for line in output.lines() {
+        if !line.starts_with(char::is_whitespace) && line.trim_end().ends_with(':') {
+            pkg = Some(line.trim().trim_end_matches(':').to_string());
+            candidate = None;
+            continue;
+        }
+        let t = line.trim();
+        if let Some(c) = t.strip_prefix("Candidate:") {
+            candidate = Some(c.trim().to_string());
+            continue;
+        }
+        if let (Some(p), Some(cand)) = (&pkg, &candidate) {
+            let body = t.strip_prefix("*** ").unwrap_or(t);
+            if body.split_whitespace().next() == Some(cand.as_str()) {
+                if let Some(pos) = body.find("(phased ") {
+                    let rest = &body[pos + "(phased ".len()..];
+                    if let Some(end) = rest.find('%') {
+                        if let Ok(pct) = rest[..end].trim().parse::<u32>() {
+                            if !out.iter().any(|(n, _)| n == p) {
+                                out.push((p.clone(), pct));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The tally line both simulations (and a real run) end with:
+/// "5 upgraded, 12 newly installed, 0 to remove and 1 not upgraded."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AptCounts {
+    pub upgraded: u32,
+    pub newly_installed: u32,
+    pub to_remove: u32,
+    pub not_upgraded: u32,
+}
+
+pub fn parse_apt_counts(output: &str) -> Option<AptCounts> {
+    for line in output.lines() {
+        let line = line.trim();
+        if !line.contains(" upgraded, ") || !line.contains(" newly installed, ")
+            || !line.contains(" to remove and ") || !line.contains(" not upgraded.") {
+            continue;
+        }
+        let nums: Vec<u32> = line.split(|c: char| !(c.is_ascii_digit()))
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        if nums.len() >= 4 {
+            return Some(AptCounts {
+                upgraded: nums[0], newly_installed: nums[1],
+                to_remove: nums[2], not_upgraded: nums[3],
+            });
+        }
+    }
+    None
+}
+
+/// What apt's resolver plans to do, read from a simulation's text.
+/// Names keep first-seen order (the order apt would act in).
+#[derive(Debug, Clone, Default)]
+pub struct SimPlan {
+    /// Every package an "Inst" line installs (upgrades + brand-new).
+    pub installs: Vec<String>,
+    /// Installs that replace an installed version ("Inst name [old]").
+    pub upgraded: Vec<String>,
+    /// Installs with no installed version to replace — the new
+    /// companion packages a full upgrade brings in.
+    pub fresh: Vec<String>,
+    /// Packages a "Remv" line would remove.
+    pub removals: Vec<String>,
+    /// The simulation's own kept-back section.
+    pub kept_back: Vec<String>,
+    pub counts: Option<AptCounts>,
+}
+
+fn push_unique(v: &mut Vec<String>, s: &str) {
+    if !v.iter().any(|x| x == s) { v.push(s.to_string()); }
+}
+
+pub fn parse_sim_plan(output: &str) -> SimPlan {
+    let mut plan = SimPlan { counts: parse_apt_counts(output), ..Default::default() };
+    plan.kept_back = parse_kept_back(output);
+    for line in output.lines() {
+        let mut it = line.split_whitespace();
+        match it.next() {
+            Some("Inst") => {
+                if let Some(name) = it.next() {
+                    push_unique(&mut plan.installs, name);
+                    // "Inst name [old] (new …)" upgrades; "Inst name (new …)" is new.
+                    match it.next() {
+                        Some(tok) if tok.starts_with('[') => push_unique(&mut plan.upgraded, name),
+                        _ => push_unique(&mut plan.fresh, name),
+                    }
+                }
+            }
+            Some("Remv") => {
+                if let Some(name) = it.next() { push_unique(&mut plan.removals, name); }
+            }
+            _ => {}
+        }
+    }
+    plan
+}
+
+/// The plain clause behind an unmet dependency, from
+/// `apt-get -s install <pkg>`:
+///   containerd.io : Depends: libseccomp2 (>= 2.6.0) but 2.5.5-1ubuntu3.1 is to be installed
+/// → "needs libseccomp2 2.6.0 or newer, but this system only offers
+///    2.5.5-1ubuntu3.1". Other shapes fall back to apt's own words.
+pub fn parse_unmet_dependency(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let Some(pos) = line.find(" : Depends: ") else { continue };
+        let tail = line[pos + " : Depends: ".len()..].trim();
+        let mut parts = tail.splitn(2, " but ");
+        let need = parts.next().unwrap_or("").trim();
+        let but = parts.next().unwrap_or("").trim();
+        let mut need_it = need.split_whitespace();
+        let dep = need_it.next().unwrap_or("");
+        let want = need_it.next().unwrap_or("").trim_matches(|c| c == '(' || c == ')');
+        let want_ver = need_it.next().unwrap_or("").trim_matches(|c| c == '(' || c == ')');
+        if !dep.is_empty() && want == ">=" && !want_ver.is_empty() {
+            if let Some(avail) = but.strip_suffix(" is to be installed") {
+                return Some(format!(
+                    "needs {dep} {want_ver} or newer, but this system only offers {}",
+                    avail.trim()));
+            }
+            if but.contains("not going to be installed") || but.contains("not installable") {
+                return Some(format!(
+                    "needs {dep} {want_ver} or newer, but that isn't available for this system"));
+            }
+        }
+        if !need.is_empty() {
+            return Some(format!("needs {need}"));
+        }
+    }
+    None
+}
+
+/// Everything the apt classifier needs, gathered from apt's own
+/// read-only simulations at check time.
+#[derive(Debug, Default)]
+pub struct AptSignals {
+    pub kept_back: Vec<String>,
+    pub phased: Vec<String>,
+    pub phased_percents: Vec<(String, u32)>,
+    pub held: Vec<String>,
+    pub full_plan: SimPlan,
+    /// Plain unmet-dependency clause per blocked package name.
+    pub blocked_reasons: Vec<(String, String)>,
+}
+
+/// Classify one apt update into (status, plain-English row note,
+/// phased percent). Precedence: a hold is the user's own instruction
+/// and wins; phasing is Ubuntu's timing and no local action overrides
+/// it; then the kept-back pair of truths — installable by a full
+/// upgrade (KeptBack) vs. kept back even there (Blocked).
+pub fn classify_apt(name: &str, sig: &AptSignals) -> (UpdateStatus, Option<String>, Option<u32>) {
+    if sig.held.iter().any(|n| n == name) {
+        return (UpdateStatus::Held, Some(
+            "On hold — this package was put on hold, so it won't update until the hold is removed.".into()), None);
+    }
+    if sig.phased.iter().any(|n| n == name) {
+        let pct = sig.phased_percents.iter().find(|(n, _)| n == name).map(|(_, p)| *p);
+        let note = match pct {
+            Some(p) => format!("Waiting — Ubuntu is releasing this update gradually (about {p}% of machines have it so far). It will install on a later check, on its own."),
+            None => "Waiting — Ubuntu is releasing this update in phases and hasn't released it to this machine yet. It will install on a later check, on its own.".into(),
+        };
+        return (UpdateStatus::Phased, Some(note), pct);
+    }
+    if sig.kept_back.iter().any(|n| n == name) {
+        if sig.full_plan.kept_back.iter().any(|n| n == name) {
+            let note = match sig.blocked_reasons.iter().find(|(n, _)| n == name) {
+                Some((_, r)) => format!("Can't install yet — it {r}. Even the full upgrade can't install it; it has to wait for a matching package to be published."),
+                None => "Can't install yet — something it needs isn't available for this system, and even the full upgrade can't install it. It has to wait for a matching package to be published.".into(),
+            };
+            return (UpdateStatus::Blocked, Some(note), None);
+        }
+        return (UpdateStatus::KeptBack, Some(
+            "Waiting — this update brings new companion packages, and the safe update isn't allowed to install those. The \u{201c}Install these too\u{201d} button below can install it.".into()), None);
+    }
+    (UpdateStatus::Ready, None, None)
+}
+
+/// Gather the classifier signals from apt's read-only simulations.
+/// Every command is a query — the `-s` simulations install nothing.
+pub fn apt_signals(upgradable: &[UpgradableEntry]) -> AptSignals {
+    let mut sig = AptSignals::default();
+    if let Some(sim) = cmd("apt-get", &["-s", "upgrade"]) {
+        sig.kept_back = parse_kept_back(&sim);
+        sig.phased = parse_phased_deferred(&sim);
+    }
+    if !upgradable.is_empty() {
+        let names: Vec<String> = upgradable.iter().map(|e| e.name.clone()).collect();
+        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let mut args: Vec<&str> = vec!["policy"];
+        args.extend(refs.iter().copied());
+        if let Some(pol) = cmd("apt-cache", &args) {
+            sig.phased_percents = parse_phased_percents(&pol);
+        }
+    }
+    if let Some(full) = cmd("apt-get", &["-s", "full-upgrade"]) {
+        sig.full_plan = parse_sim_plan(&full);
+    }
+    if let Some(holds) = cmd("apt-mark", &["showhold"]) {
+        sig.held = holds.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    }
+    // Unmet-dependency reasons only for names BOTH simulations keep
+    // back — the one case where "waiting" needs a deeper truth.
+    for name in &sig.kept_back {
+        if sig.full_plan.kept_back.contains(name) && !sig.phased.contains(name) {
+            if let Some(out) = cmd("apt-get", &["-s", "install", name]) {
+                if let Some(r) = parse_unmet_dependency(&out) {
+                    sig.blocked_reasons.push((name.clone(), r));
+                }
+            }
+        }
+    }
+    sig
+}
+
+/// One kept-back update even a full upgrade can't install yet.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct BlockedUpdate {
+    pub name: String,
+    /// Plain clause ("needs libseccomp2 2.6.0 or newer, but …"), when
+    /// apt's install simulation named the blocker.
+    pub reason: Option<String>,
+}
+
+/// The full upgrade's plan, composed from the simulations BEFORE
+/// anything runs — the confirmation the user reads is this struct,
+/// so what he's told is what apt itself predicts.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct FullUpgradePlan {
+    /// False on non-apt systems (nothing to plan).
+    pub available: bool,
+    /// Kept-back updates the full upgrade WILL install.
+    pub waiting: Vec<String>,
+    /// Brand-new companion packages it will install alongside.
+    pub new_companions: Vec<String>,
+    /// Packages it would REMOVE to make room — named, never a surprise.
+    pub removals: Vec<String>,
+    /// Kept-back updates even this can't install yet, with reasons.
+    pub blocked: Vec<BlockedUpdate>,
+    /// A kernel package is in the install set — a restart follows.
+    pub needs_restart: bool,
+}
+
+pub fn plan_from_outputs(upgradable: &[UpgradableEntry], sig: &AptSignals) -> FullUpgradePlan {
+    let mut plan = FullUpgradePlan { available: true, ..Default::default() };
+    for e in upgradable {
+        match classify_apt(&e.name, sig).0 {
+            UpdateStatus::KeptBack => plan.waiting.push(e.name.clone()),
+            UpdateStatus::Blocked => plan.blocked.push(BlockedUpdate {
+                name: e.name.clone(),
+                reason: sig.blocked_reasons.iter()
+                    .find(|(n, _)| n == &e.name).map(|(_, r)| r.clone()),
+            }),
+            _ => {}
+        }
+    }
+    plan.new_companions = sig.full_plan.fresh.clone();
+    plan.removals = sig.full_plan.removals.clone();
+    plan.needs_restart = sig.full_plan.installs.iter()
+        .any(|n| n.starts_with("linux-image") || n.starts_with("linux-generic"));
+    plan
+}
+
+/// Live preflight for the "Install these too" confirmation: parse the
+/// current simulations into the plan the dialog will read aloud.
+pub fn full_upgrade_plan() -> FullUpgradePlan {
+    if !which("apt") { return FullUpgradePlan::default(); }
+    let entries = cmd("apt", &["list", "--upgradable"])
+        .map(|o| parse_upgradable_list(&o)).unwrap_or_default();
+    let sig = apt_signals(&entries);
+    plan_from_outputs(&entries, &sig)
+}
+
 /// What an apply actually achieved, established by RE-CHECKING the group
 /// afterwards — never by the apply's exit code alone. v0.8.3 trusted
 /// exit 0 and declared "fully up to date" while apt had deferred every
@@ -201,22 +578,54 @@ pub struct ApplyReport {
     pub remaining: usize,
     /// Remaining items held back by Ubuntu phasing, by name.
     pub deferred: Vec<String>,
+    /// Remaining items kept back for new companion packages, by name.
+    pub kept_back: Vec<String>,
+    /// Remaining items on hold, by name.
+    pub held: Vec<String>,
+    /// Remaining items that can't install yet (unmet needs), by name.
+    pub blocked: Vec<String>,
+    /// Plain-English summary lines — the dialog leads with these; the
+    /// raw output follows behind the details divider.
+    pub summary: Vec<String>,
     /// The plain-language headline the dialog leads with.
     pub headline: String,
 }
 
 /// Compose the report from the apply output and the RE-CHECKED group
-/// items. Deferred names come from the items' check-time phasing notes,
-/// unioned with names parsed from the apply output itself (both filtered
-/// to items that actually remain).
+/// items. Remaining items are bucketed by their check-time status
+/// (unioned, for the phased/kept-back buckets, with the sections the
+/// apply output itself printed — filtered to items that actually
+/// remain). Every claim derives from the re-check, never from the
+/// apply's exit code. Dickles, 2026-10-17: the old fallback headline
+/// ("N updates still remain — the output below shows what happened")
+/// over a wall of raw apt text was the complaint that built this.
 pub fn apply_report(output: String, remaining_items: &[UpdateItem]) -> ApplyReport {
-    let from_output = parse_phased_deferred(&output);
-    let deferred: Vec<String> = remaining_items
-        .iter()
-        .filter(|i| i.note.is_some() || from_output.contains(&i.name))
-        .map(|i| i.name.clone())
-        .collect();
+    let from_output_phased = parse_phased_deferred(&output);
+    let from_output_kept = parse_kept_back(&output);
     let remaining = remaining_items.len();
+    let mut deferred: Vec<String> = Vec::new();
+    let mut kept_back: Vec<String> = Vec::new();
+    let mut held: Vec<String> = Vec::new();
+    let mut blocked: Vec<String> = Vec::new();
+    let mut other: Vec<String> = Vec::new();
+    for i in remaining_items {
+        match i.status {
+            UpdateStatus::Phased => deferred.push(i.name.clone()),
+            UpdateStatus::KeptBack => kept_back.push(i.name.clone()),
+            UpdateStatus::Held => held.push(i.name.clone()),
+            UpdateStatus::Blocked => blocked.push(i.name.clone()),
+            UpdateStatus::Ready => {
+                if from_output_phased.contains(&i.name) {
+                    deferred.push(i.name.clone());
+                } else if from_output_kept.contains(&i.name) {
+                    kept_back.push(i.name.clone());
+                } else {
+                    other.push(i.name.clone());
+                }
+            }
+        }
+    }
+    let s = if remaining == 1 { "" } else { "s" };
     let headline = if remaining == 0 {
         "Finished — this group is fully up to date.".to_string()
     } else if deferred.len() == remaining {
@@ -229,22 +638,96 @@ pub fn apply_report(output: String, remaining_items: &[UpdateItem]) -> ApplyRepo
             if remaining == 1 { "It will" } else { "They'll" },
             if remaining == 1 { "it" } else { "them" },
         )
-    } else if !deferred.is_empty() {
+    } else if kept_back.len() == remaining {
         format!(
-            "Finished — {} update{} still remain. {} of them ({}) are being held back by Ubuntu's phased rollout and will install on a later check; the output below shows the rest.",
+            "Finished — but {} update{} not installed: {}. They bring new companion packages the safe update isn't allowed to install — the \u{201c}Install these too\u{201d} button on the Updates page can install them now.",
+            remaining,
+            if remaining == 1 { " was" } else { "s were" },
+            kept_back.join(", "),
+        )
+    } else if held.len() == remaining {
+        format!(
+            "Finished — but {} update{} on hold ({}) and didn't install. They'll stay put until the hold is removed.",
+            remaining,
+            if remaining == 1 { " is" } else { "s are" },
+            held.join(", "),
+        )
+    } else if blocked.len() == remaining {
+        format!(
+            "Finished — but {} update{} still can't install: {}. Something they need isn't available for this system yet — the summary below explains.",
             remaining,
             if remaining == 1 { "" } else { "s" },
-            deferred.len(),
-            deferred.join(", "),
+            blocked.join(", "),
         )
     } else {
+        let mut parts: Vec<String> = Vec::new();
+        if !kept_back.is_empty() {
+            parts.push(format!("{} waiting on new companion packages ({})",
+                kept_back.len(), kept_back.join(", ")));
+        }
+        if !deferred.is_empty() {
+            parts.push(format!("{} held back by Ubuntu's phased rollout ({})",
+                deferred.len(), deferred.join(", ")));
+        }
+        if !held.is_empty() {
+            parts.push(format!("{} on hold ({})", held.len(), held.join(", ")));
+        }
+        if !blocked.is_empty() {
+            parts.push(format!("{} that can't install yet ({})",
+                blocked.len(), blocked.join(", ")));
+        }
+        if !other.is_empty() {
+            parts.push(format!("{} for another reason", other.len()));
+        }
         format!(
-            "Finished — {} update{} still remain. The output below shows what happened.",
-            remaining,
-            if remaining == 1 { "" } else { "s" },
+            "Finished — {} update{} still remain: {}. The summary below explains each group.",
+            remaining, s, parts.join("; "),
         )
     };
-    ApplyReport { output, remaining, deferred, headline }
+    // The plain-English summary the finished dialog leads with. The
+    // installed count comes from the run's own tally line; everything
+    // else comes from the re-check's buckets.
+    let mut summary: Vec<String> = Vec::new();
+    if let Some(c) = parse_apt_counts(&output) {
+        let n = c.upgraded + c.newly_installed;
+        if n > 0 {
+            summary.push(format!("Installed {} package{}.", n, if n == 1 { "" } else { "s" }));
+        } else if remaining > 0 {
+            summary.push("Nothing was installed this time.".to_string());
+        }
+    }
+    if remaining == 0 {
+        summary.push("Everything in this group is now up to date.".to_string());
+    }
+    if !kept_back.is_empty() {
+        summary.push(format!(
+            "Still waiting — {}: they bring new companion packages the safe update isn't allowed to install. The \u{201c}Install these too\u{201d} button on the Updates page can install them now.",
+            kept_back.join(", ")));
+    }
+    if !deferred.is_empty() {
+        summary.push(format!(
+            "Still waiting — {}: Ubuntu is releasing {} in phases and hasn't released {} to this machine yet. {} install on a later check.",
+            deferred.join(", "),
+            if deferred.len() == 1 { "this one" } else { "these" },
+            if deferred.len() == 1 { "it" } else { "them" },
+            if deferred.len() == 1 { "It will" } else { "They'll" }));
+    }
+    if !held.is_empty() {
+        summary.push(format!(
+            "Still waiting — {}: on hold, so they won't update until the hold is removed.",
+            held.join(", ")));
+    }
+    if !blocked.is_empty() {
+        summary.push(format!(
+            "Still blocked — {}: something they need isn't available for this system yet, so even a full upgrade can't install them. The details below show what the package manager said.",
+            blocked.join(", ")));
+    }
+    if !other.is_empty() {
+        summary.push(format!(
+            "Still remaining — {}: the details below show what the package manager said.",
+            other.join(", ")));
+    }
+    ApplyReport { output, remaining, deferred, kept_back, held, blocked, summary, headline }
 }
 
 pub fn collect_updates() -> UpdatesInfo {
@@ -261,32 +744,26 @@ pub fn collect_updates() -> UpdatesInfo {
                 let name = it.next().unwrap_or("").to_string();
                 let cur = it.next().map(|s| s.to_string());
                 let avail = if line.contains("->") { line.split("->").nth(1).map(|s| s.trim().to_string()) } else { None };
-                if !name.is_empty() { info.system_updates.push(UpdateItem { name, current: cur, available: avail, source: "pacman".into(), note: None }); }
+                if !name.is_empty() { info.system_updates.push(UpdateItem { name, current: cur, available: avail, source: "pacman".into(), note: None, status: UpdateStatus::Ready, phased_percent: None }); }
             },
             None => info.notes.push("pacman -Qu returned nothing (up to date, or checkupdates not run)".into()),
         }
         if which("checkupdates") { info.notes.push("Tip: `checkupdates` gives a sync-free count without root.".into()); }
     } else if which("apt") {
-        if let Some(out) = cmd("apt", &["list", "--upgradable"]) {
-            for line in out.lines().skip(1) {
-                let name = line.split('/').next().unwrap_or("").to_string();
-                if !name.is_empty() { info.system_updates.push(UpdateItem { name, current: None, available: None, source: "apt".into(), note: None }); }
-            }
-        }
-        // Ubuntu phased rollouts: `apt list --upgradable` lists packages
-        // apt will REFUSE to install yet ("deferred due to phasing" in a
-        // simulated upgrade). Mark them at check time so the row tells
-        // the truth instead of showing bare version cells, and so a
-        // post-apply re-check can name them. Simulation is read-only.
-        if let Some(sim) = cmd("apt-get", &["-s", "upgrade"]) {
-            let deferred = parse_phased_deferred(&sim);
-            if !deferred.is_empty() {
-                for item in &mut info.system_updates {
-                    if deferred.contains(&item.name) {
-                        item.note = Some("Deferred by Ubuntu phasing — not yet released to this machine".into());
-                    }
-                }
-            }
+        // Versions come from the same `apt list --upgradable` line that
+        // names the package (v0.8.9: the collector used to discard
+        // them, and the listing showed "None -> None"). Every row is
+        // then classified from apt's own read-only simulations — can
+        // it install, and if not, exactly why (apt_signals/classify_apt).
+        let entries = cmd("apt", &["list", "--upgradable"])
+            .map(|o| parse_upgradable_list(&o)).unwrap_or_default();
+        let sig = apt_signals(&entries);
+        for e in entries {
+            let (status, note, pct) = classify_apt(&e.name, &sig);
+            info.system_updates.push(UpdateItem {
+                name: e.name, current: e.current, available: e.available,
+                source: "apt".into(), note, status, phased_percent: pct,
+            });
         }
         // Freshness honesty (fix-claim #2 was PARTIAL at v0.8.7): this
         // scan reads whatever lists are on disk — it does NOT refresh
@@ -303,7 +780,7 @@ pub fn collect_updates() -> UpdatesInfo {
     } else if which("dnf") {
         if let Some(out) = cmd("dnf", &["check-update", "--quiet"]) {
             for line in out.lines() { let n = line.split_whitespace().next().unwrap_or("");
-                if !n.is_empty() { info.system_updates.push(UpdateItem { name: n.into(), current: None, available: None, source: "dnf".into(), note: None }); } }
+                if !n.is_empty() { info.system_updates.push(UpdateItem { name: n.into(), current: None, available: None, source: "dnf".into(), note: None, status: UpdateStatus::Ready, phased_percent: None }); } }
         }
     } else {
         info.notes.push("No supported package manager found for update check.".into());
@@ -322,7 +799,7 @@ pub fn collect_updates() -> UpdatesInfo {
                                     info.firmware_updates.push(UpdateItem { name: name.clone(),
                                         current: d.get("Version").and_then(|x| x.as_str()).map(|s| s.to_string()),
                                         available: r.get("Version").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                                        source: "fwupd/LVFS".into(), note: None });
+                                        source: "fwupd/LVFS".into(), note: None, status: UpdateStatus::Ready, phased_percent: None });
                                 }
                             }
                         }
@@ -343,7 +820,7 @@ pub fn collect_updates() -> UpdatesInfo {
                 let mut c = line.split('\t');
                 let name = c.next().unwrap_or("").to_string();
                 if !name.is_empty() { info.flatpak_updates.push(UpdateItem { name,
-                    current: None, available: c.next().map(|s| s.to_string()), source: "flatpak".into(), note: None }); }
+                    current: None, available: c.next().map(|s| s.to_string()), source: "flatpak".into(), note: None, status: UpdateStatus::Ready, phased_percent: None }); }
             }
         }
     }
@@ -396,7 +873,13 @@ mod tests {
 
     fn item(name: &str, note: Option<&str>) -> UpdateItem {
         UpdateItem { name: name.into(), current: None, available: None,
-            source: "apt".into(), note: note.map(|s| s.to_string()) }
+            source: "apt".into(), note: note.map(|s| s.to_string()),
+            status: UpdateStatus::Ready, phased_percent: None }
+    }
+
+    fn item_s(name: &str, status: UpdateStatus) -> UpdateItem {
+        UpdateItem { name: name.into(), current: None, available: None,
+            source: "apt".into(), note: None, status, phased_percent: None }
     }
 
     #[test]
@@ -405,8 +888,8 @@ mod tests {
         // "fully up to date". The re-check drives the headline now.
         let out = "The following upgrades have been deferred due to phasing:\n  apparmor libapparmor1\n0 upgraded.\n".to_string();
         let remaining = vec![
-            item("apparmor", Some("Deferred by Ubuntu phasing — not yet released to this machine")),
-            item("libapparmor1", Some("Deferred by Ubuntu phasing — not yet released to this machine")),
+            item_s("apparmor", UpdateStatus::Phased),
+            item_s("libapparmor1", UpdateStatus::Phased),
         ];
         let r = apply_report(out, &remaining);
         assert_eq!(r.remaining, 2);
@@ -429,7 +912,7 @@ mod tests {
         assert!(!r2.headline.contains("fully up to date"));
         // Mixed: one phased, one other.
         let r3 = apply_report("done\n".into(), &[
-            item("phased-pkg", Some("Deferred by Ubuntu phasing — not yet released to this machine")),
+            item_s("phased-pkg", UpdateStatus::Phased),
             item("other-pkg", None),
         ]);
         assert_eq!(r3.deferred, vec!["phased-pkg"]);
@@ -509,5 +992,218 @@ mod tests {
         assert_eq!(human_age(600), "10 minutes");
         assert_eq!(human_age(7200), "2 hours");
         assert_eq!(human_age(3 * 86_400), "3 days");
+    }
+
+    // ---- v0.8.9 plain-talk classification --------------------------------
+    // Fixtures are FULL live captures (tests/fixtures/): the Dell on
+    // 2026-10-17 with its six kept-back updates, and the G9 the same
+    // evening with snapd mid-phased-rollout. Parsers soak on the real
+    // corpus, never on samples typed from memory.
+
+    const DELL_LIST: &str = include_str!("../tests/fixtures/dell-apt-list-upgradable.txt");
+    const DELL_SIM_UPGRADE: &str = include_str!("../tests/fixtures/dell-aptget-s-upgrade.txt");
+    const DELL_SIM_FULL: &str = include_str!("../tests/fixtures/dell-aptget-s-full-upgrade.txt");
+    const DELL_POLICY: &str = include_str!("../tests/fixtures/dell-apt-cache-policy.txt");
+    const DELL_INSTALL_CONTAINERD: &str = include_str!("../tests/fixtures/dell-aptget-s-install-containerd.txt");
+    const G9_LIST: &str = include_str!("../tests/fixtures/g9-apt-list-upgradable.txt");
+    const G9_SIM_UPGRADE: &str = include_str!("../tests/fixtures/g9-aptget-s-upgrade.txt");
+    const G9_POLICY: &str = include_str!("../tests/fixtures/g9-apt-cache-policy.txt");
+
+    /// Rebuild the Dell's signals from the captures, following the
+    /// same gating apt_signals uses (unmet-dependency probes only for
+    /// names both simulations keep back).
+    fn dell_signals() -> AptSignals {
+        let mut sig = AptSignals {
+            kept_back: parse_kept_back(DELL_SIM_UPGRADE),
+            phased: parse_phased_deferred(DELL_SIM_UPGRADE),
+            phased_percents: parse_phased_percents(DELL_POLICY),
+            held: vec![],
+            full_plan: parse_sim_plan(DELL_SIM_FULL),
+            blocked_reasons: vec![],
+        };
+        for name in &sig.kept_back {
+            if sig.full_plan.kept_back.contains(name) {
+                if let Some(r) = parse_unmet_dependency(DELL_INSTALL_CONTAINERD) {
+                    sig.blocked_reasons.push((name.clone(), r));
+                }
+            }
+        }
+        sig
+    }
+
+    #[test]
+    fn upgradable_list_carries_real_versions() {
+        // The "None -> None" bug: apt printed both versions all along.
+        let entries = parse_upgradable_list(DELL_LIST);
+        assert_eq!(entries.len(), 6);
+        let c = &entries[0];
+        assert_eq!(c.name, "containerd.io");
+        assert_eq!(c.current.as_deref(), Some("2.2.6-1~debian.13~trixie"));
+        assert_eq!(c.available.as_deref(), Some("2.4.2-2~debian.13~trixie"));
+        let nv = entries.iter().find(|e| e.name == "linux-modules-nvidia-580-generic-hwe-24.04").unwrap();
+        assert_eq!(nv.current.as_deref(), Some("7.0.0-31.31~24.04.1+1"));
+        assert_eq!(nv.available.as_deref(), Some("7.0.0-38.38~24.04.4+1"));
+        let g9 = parse_upgradable_list(G9_LIST);
+        assert_eq!(g9.len(), 1);
+        assert_eq!(g9[0].name, "snapd");
+        assert_eq!(g9[0].current.as_deref(), Some("2.76.3+ubuntu24.04"));
+        assert_eq!(g9[0].available.as_deref(), Some("2.77.1+ubuntu24.04"));
+    }
+
+    #[test]
+    fn kept_back_parses_the_dell_six_and_not_the_g9_phased() {
+        assert_eq!(parse_kept_back(DELL_SIM_UPGRADE), vec![
+            "containerd.io", "gnome-shell-extension-zorin-dash",
+            "linux-generic-hwe-24.04", "linux-headers-generic-hwe-24.04",
+            "linux-image-generic-hwe-24.04", "linux-modules-nvidia-580-generic-hwe-24.04",
+        ]);
+        // The G9 sim defers snapd to phasing and keeps NOTHING back —
+        // the two sections must never bleed into each other.
+        assert!(parse_kept_back(G9_SIM_UPGRADE).is_empty());
+        assert_eq!(parse_phased_deferred(G9_SIM_UPGRADE), vec!["snapd"]);
+        // The full-upgrade sim keeps back exactly one: containerd.io.
+        assert_eq!(parse_kept_back(DELL_SIM_FULL), vec!["containerd.io"]);
+    }
+
+    #[test]
+    fn phased_percents_come_from_policy() {
+        // Live G9 capture: snapd's candidate line carries "(phased 60%)".
+        assert_eq!(parse_phased_percents(G9_POLICY), vec![("snapd".to_string(), 60)]);
+        // None of the Dell's six are phased; other versions in their
+        // tables must not leak a percent onto the candidate.
+        assert!(parse_phased_percents(DELL_POLICY).is_empty());
+    }
+
+    #[test]
+    fn apt_counts_parse_the_real_tally_lines() {
+        assert_eq!(parse_apt_counts(DELL_SIM_UPGRADE),
+            Some(AptCounts { upgraded: 0, newly_installed: 0, to_remove: 0, not_upgraded: 6 }));
+        assert_eq!(parse_apt_counts(DELL_SIM_FULL),
+            Some(AptCounts { upgraded: 5, newly_installed: 12, to_remove: 0, not_upgraded: 1 }));
+        assert_eq!(parse_apt_counts(G9_SIM_UPGRADE),
+            Some(AptCounts { upgraded: 0, newly_installed: 0, to_remove: 0, not_upgraded: 1 }));
+    }
+
+    #[test]
+    fn unmet_dependency_becomes_plain_english() {
+        let r = parse_unmet_dependency(DELL_INSTALL_CONTAINERD).unwrap();
+        assert_eq!(r, "needs libseccomp2 2.6.0 or newer, but this system only offers 2.5.5-1ubuntu3.1");
+    }
+
+    #[test]
+    fn dell_six_classify_five_kept_back_one_blocked() {
+        let sig = dell_signals();
+        let entries = parse_upgradable_list(DELL_LIST);
+        let mut kept = 0;
+        for e in &entries {
+            let (status, note, pct) = classify_apt(&e.name, &sig);
+            assert_eq!(pct, None);
+            if e.name == "containerd.io" {
+                assert_eq!(status, UpdateStatus::Blocked, "{}", e.name);
+                let n = note.unwrap();
+                assert!(n.contains("libseccomp2 2.6.0"), "{n}");
+                assert!(n.contains("Even the full upgrade can't install it"), "{n}");
+            } else {
+                assert_eq!(status, UpdateStatus::KeptBack, "{}", e.name);
+                assert!(note.unwrap().contains("companion packages"));
+                kept += 1;
+            }
+        }
+        assert_eq!(kept, 5);
+    }
+
+    #[test]
+    fn g9_snapd_classifies_phased_with_percent() {
+        let sig = AptSignals {
+            kept_back: parse_kept_back(G9_SIM_UPGRADE),
+            phased: parse_phased_deferred(G9_SIM_UPGRADE),
+            phased_percents: parse_phased_percents(G9_POLICY),
+            held: vec![],
+            full_plan: SimPlan::default(),
+            blocked_reasons: vec![],
+        };
+        let (status, note, pct) = classify_apt("snapd", &sig);
+        assert_eq!(status, UpdateStatus::Phased);
+        assert_eq!(pct, Some(60));
+        assert!(note.unwrap().contains("60%"));
+    }
+
+    #[test]
+    fn held_wins_and_unknown_is_ready() {
+        let mut sig = AptSignals::default();
+        sig.held = vec!["snapd".into()];
+        sig.phased = vec!["snapd".into()];
+        sig.kept_back = vec!["snapd".into()];
+        assert_eq!(classify_apt("snapd", &sig).0, UpdateStatus::Held);
+        let (status, note, pct) = classify_apt("something-else", &AptSignals::default());
+        assert_eq!(status, UpdateStatus::Ready);
+        assert!(note.is_none());
+        assert_eq!(pct, None);
+    }
+
+    #[test]
+    fn full_upgrade_plan_names_everything() {
+        let entries = parse_upgradable_list(DELL_LIST);
+        let plan = plan_from_outputs(&entries, &dell_signals());
+        assert!(plan.available);
+        assert_eq!(plan.waiting, vec![
+            "gnome-shell-extension-zorin-dash", "linux-generic-hwe-24.04",
+            "linux-headers-generic-hwe-24.04", "linux-image-generic-hwe-24.04",
+            "linux-modules-nvidia-580-generic-hwe-24.04",
+        ]);
+        assert_eq!(plan.blocked.len(), 1);
+        assert_eq!(plan.blocked[0].name, "containerd.io");
+        assert!(plan.blocked[0].reason.as_deref().unwrap().contains("libseccomp2"));
+        assert_eq!(plan.new_companions.len(), 12);
+        assert!(plan.new_companions.contains(&"gir1.2-dbusmenu-glib-0.4".to_string()));
+        assert!(plan.new_companions.contains(&"linux-image-7.0.0-38-generic".to_string()));
+        assert!(plan.removals.is_empty());
+        assert!(plan.needs_restart, "a new kernel is in the install set");
+    }
+
+    #[test]
+    fn apply_report_explains_kept_back_in_plain_english() {
+        // Dickles' screenshot, rebuilt: the safe apply installed
+        // nothing and all six remained.
+        let out = "0 upgraded, 0 newly installed, 0 to remove and 6 not upgraded.\n".to_string();
+        let remaining = vec![
+            item_s("containerd.io", UpdateStatus::Blocked),
+            item_s("gnome-shell-extension-zorin-dash", UpdateStatus::KeptBack),
+            item_s("linux-generic-hwe-24.04", UpdateStatus::KeptBack),
+            item_s("linux-headers-generic-hwe-24.04", UpdateStatus::KeptBack),
+            item_s("linux-image-generic-hwe-24.04", UpdateStatus::KeptBack),
+            item_s("linux-modules-nvidia-580-generic-hwe-24.04", UpdateStatus::KeptBack),
+        ];
+        let r = apply_report(out, &remaining);
+        assert_eq!(r.remaining, 6);
+        assert_eq!(r.kept_back.len(), 5);
+        assert_eq!(r.blocked, vec!["containerd.io"]);
+        assert!(r.headline.contains("still remain"), "{}", r.headline);
+        assert!(r.headline.contains("waiting on new companion packages"), "{}", r.headline);
+        assert!(r.headline.contains("can't install yet"), "{}", r.headline);
+        assert!(!r.headline.contains("fully up to date"), "{}", r.headline);
+        assert!(r.summary.iter().any(|l| l.contains("Nothing was installed this time.")), "{:?}", r.summary);
+        assert!(r.summary.iter().any(|l| l.starts_with("Still waiting —")), "{:?}", r.summary);
+        assert!(r.summary.iter().any(|l| l.starts_with("Still blocked — containerd.io")), "{:?}", r.summary);
+        // Kept-back only: the headline itself names the remedy.
+        let r2 = apply_report("done\n".into(), &[
+            item_s("a-pkg", UpdateStatus::KeptBack),
+            item_s("b-pkg", UpdateStatus::KeptBack),
+        ]);
+        assert!(r2.headline.contains("Install these too"), "{}", r2.headline);
+        assert!(r2.headline.contains("a-pkg"), "{}", r2.headline);
+    }
+
+    #[test]
+    fn full_upgrade_command_is_fenced_and_exact() {
+        // The ONLY full-upgrade in the crate lives behind this name,
+        // with this exact argv. The default apply table (pinned by
+        // no_apply_path_ever_dist_upgrades above) must never grow it.
+        let (prog, args) = full_upgrade_command();
+        assert_eq!(prog, "pkexec");
+        assert_eq!(args, vec!["sh", "-c",
+            "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y"]);
+        let (_, safe) = apply_command("system-apt").unwrap();
+        assert!(!safe.join(" ").contains("full-upgrade"));
     }
 }

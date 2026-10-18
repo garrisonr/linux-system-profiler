@@ -1,0 +1,7 @@
+Listing...
+containerd.io/trixie 2.4.2-2~debian.13~trixie amd64 [upgradable from: 2.2.6-1~debian.13~trixie]
+gnome-shell-extension-zorin-dash/noble,noble 110.1 all [upgradable from: 106.2.1]
+linux-generic-hwe-24.04/noble-updates,noble-security 7.0.0-38.38~24.04.4 amd64 [upgradable from: 7.0.0-31.31~24.04.1]
+linux-headers-generic-hwe-24.04/noble-updates,noble-security 7.0.0-38.38~24.04.4 amd64 [upgradable from: 7.0.0-31.31~24.04.1]
+linux-image-generic-hwe-24.04/noble-updates,noble-security 7.0.0-38.38~24.04.4 amd64 [upgradable from: 7.0.0-31.31~24.04.1]
+linux-modules-nvidia-580-generic-hwe-24.04/noble-updates,noble-security 7.0.0-38.38~24.04.4+1 amd64 [upgradable from: 7.0.0-31.31~24.04.1+1]

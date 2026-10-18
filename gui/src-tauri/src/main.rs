@@ -441,6 +441,40 @@ async fn apply_updates(app: tauri::AppHandle, group: String) -> Result<linux_sys
     }
 }
 
+/// v0.8.9 preflight for the "Install these too (full upgrade)" action:
+/// apt's own simulations composed into the plan the confirmation
+/// dialog reads aloud — what will install, which new companions ride
+/// along, what (if anything) would be removed, what even this can't
+/// fix, and whether a restart follows. Read-only; installs nothing.
+#[tauri::command]
+async fn full_upgrade_preflight() -> Result<linux_system_profiler::updates::FullUpgradePlan, String> {
+    tauri::async_runtime::spawn_blocking(
+        linux_system_profiler::updates::full_upgrade_plan,
+    ).await.map_err(|e| format!("preflight task failed: {e}"))
+}
+
+/// v0.8.9: the explicit full upgrade, reachable only behind the
+/// preflight-fed confirmation in the frontend. Rides the same pkexec
+/// streaming path as a group apply (run_apply_cmd); the command itself
+/// is the core's one fenced full_upgrade_command — the default apply
+/// table never grows it. The report comes from the same re-check.
+#[tauri::command]
+async fn apply_full_upgrade(app: tauri::AppHandle) -> Result<linux_system_profiler::updates::ApplyReport, String> {
+    use std::sync::atomic::Ordering;
+    if APPLYING.swap(true, Ordering::SeqCst) {
+        return Err("An update is already running — wait for it to finish.".to_string());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let (prog, args) = linux_system_profiler::updates::full_upgrade_command();
+        run_apply_cmd(&app, "system-apt", prog, &args)
+    }).await;
+    APPLYING.store(false, Ordering::SeqCst);
+    match result {
+        Ok(r) => r,
+        Err(e) => Err(format!("update task failed: {e}")),
+    }
+}
+
 /// The truth about an apply comes from RE-CHECKING the group, never
 /// from the exit code: v0.8.3 declared "fully up to date" on exit 0
 /// while apt had deferred every package to Ubuntu phasing and
@@ -456,7 +490,6 @@ fn ok_report(group: &str, output: String) -> linux_system_profiler::updates::App
 }
 
 fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<linux_system_profiler::updates::ApplyReport, String> {
-    use linux_system_profiler::elevate;
     // v0.6: distro-aware apply; the command table lives in the core
     // (updates::apply_command) where tests pin the safety contract — no
     // distro path may ever dist-upgrade/full-upgrade. v0.8.0's apt arm ran
@@ -465,6 +498,14 @@ fn run_apply(app: &tauri::AppHandle, group: &str) -> Result<linux_system_profile
     // in moved to the explicit Check (refresh_update_check).
     let (prog, args) = linux_system_profiler::updates::apply_command(group)
         .ok_or_else(|| format!("unknown update group: {group}"))?;
+    run_apply_cmd(app, group, prog, &args)
+}
+
+/// The streaming + session-routing body shared by the group applies
+/// and the v0.8.9 full upgrade: same pkexec path, same self-heal, same
+/// re-check-before-report discipline.
+fn run_apply_cmd(app: &tauri::AppHandle, group: &str, prog: &str, args: &[&str]) -> Result<linux_system_profiler::updates::ApplyReport, String> {
+    use linux_system_profiler::elevate;
     if prog != "pkexec" {
         // Flatpak is not elevated: single direct attempt.
         let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -593,7 +634,7 @@ fn main() {
             get_profile, get_dep_status, install_deps, copy_forum,
             share_copy, share_save, share_email, copy_text, open_url,
             run_disk_test, run_network_test, apply_updates, elevated_dmi,
-            refresh_update_check
+            refresh_update_check, full_upgrade_preflight, apply_full_upgrade
         ])
         .run(tauri::generate_context!())
         .expect("error while running Linux System Profiler");

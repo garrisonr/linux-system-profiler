@@ -1,0 +1,408 @@
+snapd:
+  Installed: 2.76.3+ubuntu24.04
+  Candidate: 2.77.1+ubuntu24.04
+  Version table:
+     2.77.1+ubuntu24.04 500 (phased 60%)
+        500 http://us.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.76.3+ubuntu24.04 100
+        100 /var/lib/dpkg/status
+     2.76+ubuntu24.04.1 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     2.62+24.04build1 500
+        500 http://us.archive.ubuntu.com/ubuntu noble/main amd64 Packages
+apparmor:
+  Installed: 4.0.1really4.0.1-0ubuntu0.24.04.9
+  Candidate: 4.0.1really4.0.1-0ubuntu0.24.04.9
+  Version table:
+ *** 4.0.1really4.0.1-0ubuntu0.24.04.9 500
+        500 http://us.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        100 /var/lib/dpkg/status
+     4.0.0-beta3-0ubuntu3 500
+        500 http://us.archive.ubuntu.com/ubuntu noble/main amd64 Packages
+brave-browser:
+  Installed: 1.97.59
+  Candidate: 1.97.59
+  Version table:
+ *** 1.97.59 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+        100 /var/lib/dpkg/status
+     1.97.57 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.97.56 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.96.61 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.96.60 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.96.59 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.95.104 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.95.102 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.95.101 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.94.121 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.94.119 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.94.117 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.93.138 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.93.137 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.93.136 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.93.134 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.93.132 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.93.129 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.92.144 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.92.143 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.92.141 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.92.140 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.92.139 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.92.138 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.92.134 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.91.180 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.91.178 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.91.175 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.91.172 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.91.171 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.91.168 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.90.128 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.90.124 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.90.122 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.90.121 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.89.145 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.89.143 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.89.141 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.89.137 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.89.132 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.88.138 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.88.136 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.88.134 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.88.132 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.88.130 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.88.127 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.87.192 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.87.191 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.87.190 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.87.188 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.87.186 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.86.148 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.86.146 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.86.142 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.86.139 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.85.120 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.85.118 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.85.117 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.85.116 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.85.111 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.84.141 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.84.139 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.84.135 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.84.132 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.83.120 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.83.118 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.83.112 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.83.109 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.82.172 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.82.170 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.82.166 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.81.137 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.81.136 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.81.135 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.81.131 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.80.125 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.80.124 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.80.122 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.80.120 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.80.115 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.80.113 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.79.126 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.79.123 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.79.119 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.79.118 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.78.102 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.78.97 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.78.94 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.77.101 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.77.100 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.77.97 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.77.95 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.76.82 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.76.81 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.76.80 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.76.74 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.76.73 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.75.181 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.75.180 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.75.178 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.75.175 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.74.51 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.74.50 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.74.48 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.73.105 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.73.104 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.73.101 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.73.97 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.73.91 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.73.89 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.71.123 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.71.121 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.71.118 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.71.114 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.70.126 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.70.123 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.70.119 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.70.117 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.69.168 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.69.162 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.69.160 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.69.153 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.68.141 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.68.137 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.68.134 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.68.128 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.67.134 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.67.123 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.67.119 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.67.116 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.67.115 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.66.118 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.66.115 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.66.113 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.66.110 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.65.133 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.65.132 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.65.130 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.65.126 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.65.123 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.65.122 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.65.114 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.64.122 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.64.116 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.64.113 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.64.109 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.63.174 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.63.169 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.63.165 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.63.162 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.63.161 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.62.165 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.62.162 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.62.156 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.62.153 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.61.120 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.61.116 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.61.114 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.61.109 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.61.104 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.61.101 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.61.100 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.60.125 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.60.118 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.60.114 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.60.110 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.59.124 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.59.120 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.59.117 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.58.137 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.58.135 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.58.131 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.58.129 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.58.127 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.58.124 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.57.64 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.57.62 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.57.57 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.57.53 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.57.47 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.56.20 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.56.14 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.56.11 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.56.9 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.52.130 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.52.129 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.52.126 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.52.122 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.52.117 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.51.118 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages
+     1.51.114 500
+        500 https://brave-browser-apt-release.s3.brave.com stable/main amd64 Packages

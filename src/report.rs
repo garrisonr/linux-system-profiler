@@ -161,7 +161,9 @@ pub fn markdown(p: &Profile, sanitized: bool) -> String {
     s += &format!("- User accounts: {} ({} admin)\n", p.accounts.len(), p.accounts.iter().filter(|a| a.admin).count());
     s += "\n## Updates (check-only)\n\n";
     s += &format!("- System: {} · Firmware: {} · Flatpak: {}\n", p.updates.system_updates.len(), p.updates.firmware_updates.len(), p.updates.flatpak_updates.len());
-    for u in p.updates.system_updates.iter().take(50) { s += &format!("  - {} {:?} -> {:?}\n", u.name, u.current, u.available); }
+    for u in p.updates.system_updates.iter().take(50) { s += &format!("  - {} {} -> {}{}\n", u.name,
+        u.current.as_deref().unwrap_or("—"), u.available.as_deref().unwrap_or("—"),
+        u.note.as_deref().map(|n| format!(" — {n}")).unwrap_or_default()); }
     s += "\n## Health flags\n\n";
     for h in &p.health { s += &format!("- **{}** {}: {}\n", h.severity, h.component, h.message); }
     if sanitized { s += "\n_Sanitized export: MACs masked, serials + hostname hashed._\n"; }

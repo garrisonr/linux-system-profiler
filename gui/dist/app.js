@@ -605,9 +605,14 @@ const VIEWS = {
     const group = (title, items, key, danger, hintKey) =>
       `<div class="card"><h3>${esc(title)}${hintKey ? hintBtn(hintKey) : ""} — ${items.length} available</h3>` +
       (items.length
-        ? items.slice(0, 60).map((u) => u.note
-          ? `<p class="mono">${esc(u.name)} <span class="chip">${esc(u.note)}</span></p>`
-          : `<p class="mono">${esc(u.name)} ${esc(u.current)} → ${esc(u.available)}</p>`).join("") +
+        ? items.slice(0, 60).map((u) => {
+          /* v0.8.9: versions AND the plain-English state — the note
+             used to REPLACE the versions, and apt rows carried no
+             versions at all ("None -> None" in the text profile). */
+          const ver = u.current && u.available ? ` ${esc(u.current)} → ${esc(u.available)}` : "";
+          return `<p class="mono">${esc(u.name)}${ver}</p>` +
+            (u.note ? `<p class="mono"><span class="chip">${esc(u.note)}</span></p>` : "");
+        }).join("") +
           `<div class="row"><button class="pill ${danger ? "danger" : "primary"}" data-apply="${key}" type="button">Apply ${esc(title)} updates</button></div>`
         : `<p>Up to date.</p>`) + `</div>`;
     const sysKey = { pacman: "system-arch", apt: "system-apt", dnf: "system-dnf" }[
@@ -626,7 +631,16 @@ const VIEWS = {
         `Check for updates refreshes the lists first, then counts.</p>`;
     }
     h += group("System packages", p.updates.system_updates, sysKey, false,
-      p.updates.system_updates.some((u) => u.note) ? "phased" : null);
+      p.updates.system_updates.some((u) => u.status === "phased") ? "phased" : null);
+    /* v0.8.9: kept-back updates get their remedy on the same page —
+       the safe apply above will leave them behind every single time,
+       and until now nothing on screen said why or what could. */
+    const kept = p.updates.system_updates.filter((u) => u.status === "kept_back");
+    if (kept.length) {
+      h += `<div class="card"><h3>${kept.length} update${kept.length === 1 ? "" : "s"} waiting on new companion packages</h3>` +
+        `<p>These updates bring new packages along with them, and the safe update isn't allowed to install new packages — so it leaves them behind every time. A full upgrade can install them, together with the companions they need. You'll see the full plan before anything runs.</p>` +
+        `<div class="row"><button class="pill primary" data-full-upgrade type="button">Install these too (full upgrade)</button></div></div>`;
+    }
     h += group("Firmware (LVFS)", p.updates.firmware_updates, "firmware", true, "lvfs");
     h += group("Flatpak", p.updates.flatpak_updates, "flatpak", false);
     if (p.updates.notes.length) h += p.updates.notes.map((n) => `<p class="empty">${esc(n)}</p>`).join("");
@@ -650,6 +664,8 @@ function wireDetail() {
     b.addEventListener("click", () => checkUpdates(b)));
   document.querySelectorAll("[data-apply]").forEach((b) =>
     b.addEventListener("click", () => applyGroup(b.dataset.apply)));
+  document.querySelectorAll("[data-full-upgrade]").forEach((b) =>
+    b.addEventListener("click", () => applyFullUpgrade()));
   document.querySelectorAll("[data-speed]").forEach((b) =>
     b.addEventListener("click", () => runSpeed(b)));
   document.querySelectorAll("[data-elevate]").forEach((b) =>
@@ -897,7 +913,7 @@ async function applyGroup(group) {
   }
   if (!ok) return;
   applying = true;
-  document.querySelectorAll("[data-apply]").forEach((b) => { b.disabled = true; });
+  document.querySelectorAll("[data-apply], [data-full-upgrade]").forEach((b) => { b.disabled = true; });
   logMeta = { action: `Apply ${label} updates`, headline: "" };
   $("logTitle").textContent = `Updating ${label}…`;
   $("logStatus").textContent = "Running — new output appears below as it happens.";
@@ -921,7 +937,19 @@ async function applyGroup(group) {
       ? `${label[0].toUpperCase() + label.slice(1)} updates complete`
       : `${label[0].toUpperCase() + label.slice(1)} updates finished`;
     $("logStatus").textContent = logMeta.headline;
-    if (!$("logBody").textContent && report.output) $("logBody").textContent = report.output;
+    /* v0.8.9: the finished dialog LEADS with the backend's
+       plain-English summary (installed / still waiting + why); the
+       raw package-manager text follows behind a divider, where the
+       Copy button still picks up everything. Dickles' complaint was
+       a wall of raw apt output with "6 updates still remain" on top. */
+    const summary = (report.summary || []).join("\n");
+    if (summary) {
+      const raw = $("logBody").textContent || report.output || "";
+      $("logBody").textContent = summary +
+        (raw ? "\n\n—— Details: what the package manager said ——\n" + raw : "");
+    } else if (!$("logBody").textContent && report.output) {
+      $("logBody").textContent = report.output;
+    }
   } catch (e) {
     /* The backend error is composed: plain-language headline first, raw
        output behind a Details divider. REPLACE the body with it — the
@@ -935,7 +963,91 @@ async function applyGroup(group) {
   } finally {
     if (unlisten) unlisten();
     applying = false;
-    document.querySelectorAll("[data-apply]").forEach((b) => { b.disabled = false; });
+    document.querySelectorAll("[data-apply], [data-full-upgrade]").forEach((b) => { b.disabled = false; });
+  }
+  await load();
+}
+
+/* v0.8.9: "Install these too (full upgrade)". The confirmation is fed
+   by the backend's live simulation (full_upgrade_preflight), so the
+   plan Dickles reads — installs, new companions, removals, the ones
+   even this can't fix, the restart — is apt's own prediction, not a
+   promise typed into the frontend. Only after he confirms does the
+   fenced full-upgrade command run, through the same progress dialog
+   and re-checked report as every other apply. */
+async function applyFullUpgrade() {
+  if (applying) { showToast("An update is already running — wait for it to finish."); return; }
+  let plan;
+  try {
+    plan = await invoke("full_upgrade_preflight");
+  } catch (e) {
+    showToast(String(e));
+    return;
+  }
+  if (!plan || !plan.available || !plan.waiting.length) {
+    showToast("Nothing is waiting on a full upgrade right now.");
+    return;
+  }
+  const parts = [];
+  parts.push(`The safe update couldn't install: ${plan.waiting.join(", ")}.`);
+  if (plan.new_companions.length) {
+    const shown = plan.new_companions.slice(0, 6).join(", ") +
+      (plan.new_companions.length > 6 ? ", …" : "");
+    parts.push(`Installing them also brings ${plan.new_companions.length} new companion package${plan.new_companions.length === 1 ? "" : "s"} (${shown}).`);
+  }
+  if (plan.removals.length) {
+    parts.push(`It would also REMOVE ${plan.removals.join(", ")} to make room.`);
+  }
+  for (const b of plan.blocked) {
+    parts.push(`Even this can't install ${b.name} yet${b.reason ? ` — it ${b.reason}` : ""}. It will keep waiting.`);
+  }
+  if (plan.needs_restart) {
+    parts.push("A new Linux kernel is included, so this machine will need a restart afterwards.");
+  }
+  parts.push("Once it starts it can't be cancelled. You can close the progress window and keep using the app — the update continues in the background.");
+  const ok = await askConfirm("Install the waiting updates?", parts.join(" "),
+    "Install them", plan.removals.length > 0);
+  if (!ok) return;
+  applying = true;
+  document.querySelectorAll("[data-apply], [data-full-upgrade]").forEach((b) => { b.disabled = true; });
+  logMeta = { action: "Install waiting updates (full upgrade)", headline: "" };
+  $("logTitle").textContent = "Installing the waiting updates…";
+  $("logStatus").textContent = "Running — new output appears below as it happens.";
+  $("logBody").textContent = "";
+  if (!$("logSheet").open) $("logSheet").showModal();
+  let unlisten = null;
+  try {
+    unlisten = await listen("update-progress", (e) => {
+      const body = $("logBody");
+      body.textContent += String(e.payload) + "\n";
+      body.scrollTop = body.scrollHeight;
+    });
+  } catch (err) { /* events unavailable: final output still arrives at the end */ }
+  try {
+    const report = await invoke("apply_full_upgrade");
+    logMeta.headline = report.headline;
+    $("logTitle").textContent = report.remaining === 0
+      ? "System packages updates complete"
+      : "System packages updates finished";
+    $("logStatus").textContent = logMeta.headline;
+    const summary = (report.summary || []).join("\n");
+    if (summary) {
+      const raw = $("logBody").textContent || report.output || "";
+      $("logBody").textContent = summary +
+        (raw ? "\n\n—— Details: what the package manager said ——\n" + raw : "");
+    } else if (!$("logBody").textContent && report.output) {
+      $("logBody").textContent = report.output;
+    }
+  } catch (e) {
+    const msg = String(e);
+    logMeta.headline = msg.split("\n")[0];
+    $("logTitle").textContent = "Update failed";
+    $("logStatus").textContent = logMeta.headline;
+    $("logBody").textContent = msg;
+  } finally {
+    if (unlisten) unlisten();
+    applying = false;
+    document.querySelectorAll("[data-apply], [data-full-upgrade]").forEach((b) => { b.disabled = false; });
   }
   await load();
 }
