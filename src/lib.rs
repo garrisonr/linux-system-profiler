@@ -1,4 +1,5 @@
 pub mod collectors;
+pub mod live;
 pub mod deps;
 pub mod elevate;
 pub mod model;

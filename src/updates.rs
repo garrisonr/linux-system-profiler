@@ -742,6 +742,56 @@ pub fn apply_report(output: String, remaining_items: &[UpdateItem]) -> ApplyRepo
     ApplyReport { output, remaining, deferred, kept_back, held, blocked, summary, headline }
 }
 
+
+// ------------------------------------------------------------ failure records
+//
+// v0.9.0: an apply that fails used to die with its dialog — Dickles hit a
+// Flatpak failure (Xournal++ 1.3.8 + GNOME Platform 51, 2026-10-18) and
+// Profiler kept NO record of why. Now every failed apply persists a
+// record (plain-English headline + the raw detail behind it) that the
+// Updates view shows until the group succeeds or he dismisses it.
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct UpdateFailure {
+    pub group: String,
+    /// "group" (a normal apply) or "full-upgrade" — Retry re-runs the
+    /// same kind of action that failed.
+    pub kind: String,
+    pub label: String,
+    pub when_unix: u64,
+    pub headline: String,
+    pub detail: String,
+}
+
+fn failures_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("update-failures.json")
+}
+
+pub fn load_update_failures(dir: &std::path::Path) -> Vec<UpdateFailure> {
+    let Ok(text) = std::fs::read_to_string(failures_path(dir)) else { return Vec::new() };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn save_update_failures(dir: &std::path::Path, items: &[UpdateFailure]) {
+    if let Ok(text) = serde_json::to_string_pretty(items) {
+        let _ = crate::atomic_write(&failures_path(dir), &text);
+    }
+}
+
+pub fn record_update_failure(dir: &std::path::Path, rec: UpdateFailure) {
+    let mut items = load_update_failures(dir);
+    items.retain(|f| f.group != rec.group);
+    items.push(rec);
+    save_update_failures(dir, &items);
+}
+
+pub fn clear_update_failure(dir: &std::path::Path, group: &str) {
+    let mut items = load_update_failures(dir);
+    let before = items.len();
+    items.retain(|f| f.group != group);
+    if items.len() != before { save_update_failures(dir, &items); }
+}
+
 pub fn collect_updates() -> UpdatesInfo {
     let mut info = UpdatesInfo { checked: true, ..Default::default() };
     stamp_collected(&mut info, std::time::SystemTime::now());

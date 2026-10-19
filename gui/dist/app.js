@@ -15,6 +15,9 @@ let current = "overview";
 
 const SECTIONS = [
   ["overview", "Overview"],
+  ["live", "Live"],
+  ["processes", "Processes"],
+  ["history", "History"],
   ["cpu", "CPU"],
   ["memory", "Memory"],
   ["storage", "Storage"],
@@ -24,6 +27,8 @@ const SECTIONS = [
   ["pci", "PCI Devices"],
   ["usb", "USB Devices"],
   ["software", "Software"],
+  ["services", "Services"],
+  ["startup", "Startup"],
   ["accounts", "Accounts & Security"],
   ["updates", "Updates"],
   ["themes", "Themes"],
@@ -670,6 +675,371 @@ const VIEWS = {
   },
 };
 
+
+/* ================= v0.9.0 — Live / Processes / History / Services / Startup
+   The Rust sampler owns the clock and the data; these views only paint
+   what the "live-sample" events hand them. No JS polling, ever. */
+
+let liveSample = null;
+const liveTrail = []; // display-only trail of aggregates for the Live graphs
+let procFilter = "", procTree = false;
+let procSort = { key: "cpu_pct", dir: -1 };
+const forceReady = new Set(); // "pid:start" pairs that ignored a polite quit
+let histPoints = [];
+let svcResult = null;
+
+const rate = (b) => b == null ? "—" : b >= 1048576 ? (b / 1048576).toFixed(1) + " MiB/s"
+  : b >= 1024 ? (b / 1024).toFixed(0) + " KiB/s" : b + " B/s";
+const pct1 = (v) => (Math.round(v * 10) / 10) + "%";
+
+function sparkSvg(points, get, maxV, label) {
+  // points: [{ts, ...}] — x from REAL timestamps; a silence longer than
+  // 6 s breaks the line (a gap stays a gap, never a fake bridge).
+  if (points.length < 2) return `<p class="empty">Collecting…</p>`;
+  const t0 = points[0].ts, t1 = points[points.length - 1].ts;
+  const span = Math.max(1, t1 - t0);
+  const max = maxV || Math.max(1, ...points.map((pt) => get(pt) || 0)) * 1.15;
+  let d = "", started = false, prevTs = null;
+  for (const pt of points) {
+    const v = get(pt);
+    if (v == null) { started = false; prevTs = null; continue; }
+    const x = ((pt.ts - t0) / span * 300).toFixed(1);
+    const y = (56 - Math.min(1, v / max) * 50).toFixed(1);
+    if (!started || (prevTs != null && pt.ts - prevTs > 6)) { d += `M${x},${y} `; started = true; }
+    else d += `L${x},${y} `;
+    prevTs = pt.ts;
+  }
+  return `<svg class="spark" viewBox="0 0 300 60" preserveAspectRatio="none" role="img" aria-label="${esc(label)}"><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"/></svg>`;
+}
+
+listen("live-sample", (e) => {
+  liveSample = e.payload;
+  liveTrail.push({ ts: liveSample.ts, cpu_pct: liveSample.cpu_pct,
+    mem_pct: liveSample.mem_total_kb ? liveSample.mem_used_kb / liveSample.mem_total_kb * 100 : 0,
+    disk: liveSample.disk_read_bps + liveSample.disk_write_bps,
+    net: liveSample.net_rx_bps + liveSample.net_tx_bps });
+  if (liveTrail.length > 300) liveTrail.shift();
+  if (current === "live") renderLiveBody();
+  else if (current === "processes") renderProcBody();
+}).catch(() => {});
+
+function liveHooks(id) {
+  invoke("set_live_lane", { fast: ["live", "processes", "history"].includes(id) }).catch(() => {});
+  if (id === "live") renderLiveBody();
+  if (id === "processes") renderProcBody();
+  if (id === "history") fillHistory();
+  if (id === "services") fillServices();
+  if (id === "startup") fillStartup();
+  if (id === "updates") fillFailureCards();
+}
+
+/* ---------------- Waiting Vizsla (update progress sheet) ----------------
+   An original little hound in the icon family's stroke language. She
+   runs while an update runs, sits beside the error when one fails, and
+   under reduced-motion the global rule stills her — she just sits. */
+function vizShow() { const v = $("logVizsla"); if (v) { v.hidden = false; v.classList.remove("sitting"); } }
+function vizHide() { const v = $("logVizsla"); if (v) { v.hidden = true; v.classList.remove("sitting"); } }
+function vizSit() { const v = $("logVizsla"); if (v) { v.hidden = false; v.classList.add("sitting"); } }
+
+/* ---------------- Live ---------------- */
+VIEWS.live = () => `<div id="liveBody"><p class="empty">Collecting the first look…</p></div>`;
+
+function renderLiveBody() {
+  const el = $("liveBody");
+  if (!el || !liveSample) return;
+  const s = liveSample;
+  const memPct = s.mem_total_kb ? s.mem_used_kb / s.mem_total_kb * 100 : 0;
+  const top = [...s.procs].sort((a, b) => b.cpu_pct - a.cpu_pct).slice(0, 5);
+  const cores = s.cores.map((c, i) =>
+    `<div class="core-row"><span class="core-name">CPU ${i}${c.kind ? ` <span class="chip">${esc(c.kind)}</span>` : ""}</span>` +
+    `<span class="core-bar"><span class="core-fill" style="width:${Math.min(100, c.pct).toFixed(0)}%"></span></span>` +
+    `<span class="core-val">${pct1(c.pct)}${c.freq_mhz ? ` · ${c.freq_mhz} MHz` : ""}</span></div>`).join("");
+  const temps = s.temps.length
+    ? s.temps.map(([n, v]) => `${esc(n)} ${v.toFixed(0)}°C`).join(" · ")
+    : "No temperature sensors are exposed on this machine.";
+  el.innerHTML =
+    `<div class="live-grid">
+      <div class="card"><h3>CPU — ${pct1(s.cpu_pct)}</h3>${sparkSvg(liveTrail, (pt) => pt.cpu_pct, 100, "CPU history")}
+        <p>Load ${s.load1.toFixed(2)} · up ${Math.floor(s.uptime_s / 3600)}h ${Math.floor(s.uptime_s % 3600 / 60)}m</p></div>
+      <div class="card"><h3>Memory — ${pct1(memPct)}</h3>${sparkSvg(liveTrail, (pt) => pt.mem_pct, 100, "Memory history")}
+        <p>${gb(s.mem_used_kb * 1024)} of ${gb(s.mem_total_kb * 1024)} used${s.swap_total_kb ? ` · swap ${gb(s.swap_used_kb * 1024)} of ${gb(s.swap_total_kb * 1024)}` : " · no swap"}</p></div>
+      <div class="card"><h3>Disk — ${rate(s.disk_read_bps + s.disk_write_bps)}</h3>${sparkSvg(liveTrail, (pt) => pt.disk, null, "Disk history")}
+        <p>Read ${rate(s.disk_read_bps)} · Write ${rate(s.disk_write_bps)}</p></div>
+      <div class="card"><h3>Network — ${rate(s.net_rx_bps + s.net_tx_bps)}</h3>${sparkSvg(liveTrail, (pt) => pt.net, null, "Network history")}
+        <p>Down ${rate(s.net_rx_bps)} · Up ${rate(s.net_tx_bps)}</p></div>
+    </div>
+    <div class="card"><h3>Per core</h3>${cores || `<p class="empty">Per-core data isn't available.</p>`}</div>
+    <div class="card"><h3>Busiest right now</h3>
+      ${top.map((pr) => `<p class="mono">${esc(pr.name)} — ${pct1(pr.cpu_pct)} cpu · ${gb(pr.rss_kb * 1024)}</p>`).join("") || `<p class="empty">Nothing to show yet.</p>`}
+      <p class="empty">Heat & power: ${temps}${s.power_w != null ? ` · package power ${s.power_w.toFixed(1)} W` : " · Power draw isn't exposed on this machine."}</p>
+      <p class="empty">Profiler itself: PID ${s.self_pid} · each look costs about ${s.sampler_ms.toFixed(1)} ms · ${s.procs.length} processes running.</p>
+    </div>`;
+}
+
+/* ---------------- Processes ---------------- */
+VIEWS.processes = () =>
+  `<div class="row proc-controls">
+     <input type="search" class="text-input" id="procFilter" placeholder="Filter by name, user or PID…" value="${esc(procFilter)}">
+     <button type="button" class="pill ${procTree ? "primary" : "secondary"}" id="procTreeBtn">${procTree ? "Tree: on" : "Tree: off"}</button>
+     <span class="empty" id="procCount"></span>
+   </div>
+   <div id="procBody"><p class="empty">Collecting the first look…</p></div>`;
+
+function sortedProcs(list) {
+  const k = procSort.key, d = procSort.dir;
+  return [...list].sort((a, b) => {
+    const av = a[k], bv = b[k];
+    if (typeof av === "string") return d * av.localeCompare(bv);
+    return d * ((av ?? -1) - (bv ?? -1));
+  });
+}
+
+function procRow(pr, depth) {
+  const self = liveSample && pr.pid === liveSample.self_pid;
+  const key = `${pr.pid}:${pr.start_ticks}`;
+  const force = forceReady.has(key);
+  return `<tr>
+    <td style="padding-left:${0.5 + (depth || 0) * 1.1}rem">${esc(pr.name)}${self ? ` <span class="chip">Profiler itself</span>` : ""}<span class="hint-line">${esc(pr.cmdline)}</span></td>
+    <td class="num">${pr.pid}</td><td>${esc(pr.user)}</td>
+    <td class="num">${pct1(pr.cpu_pct)}</td>
+    <td class="num">${gb(pr.rss_kb * 1024)}</td>
+    <td class="num">${pr.read_bps == null && pr.write_bps == null ? "—" : rate((pr.read_bps || 0) + (pr.write_bps || 0))}</td>
+    <td>${esc(pr.state)}</td>
+    <td>${self ? "" : `<button type="button" class="mini-btn" data-end="${pr.pid}:${pr.start_ticks}" data-name="${esc(pr.name)}">${force ? "Force end" : "End"}</button>`}</td></tr>`;
+}
+
+function renderProcBody() {
+  const el = $("procBody");
+  if (!el || !liveSample) return;
+  let list = liveSample.procs;
+  const q = procFilter.trim().toLowerCase();
+  if (q) list = list.filter((pr) => pr.name.toLowerCase().includes(q) || pr.user.toLowerCase().includes(q)
+    || String(pr.pid) === q || pr.cmdline.toLowerCase().includes(q));
+  const count = $("procCount");
+  if (count) count.textContent = `${list.length} of ${liveSample.procs.length} processes`;
+  const head = `<table class="proc-table"><thead><tr>
+    ${[["name", "Name"], ["pid", "PID"], ["user", "User"], ["cpu_pct", "CPU"], ["rss_kb", "Memory"], ["disk", "Disk"], ["state", "State"]].map(([k, label]) =>
+      `<th data-sort="${k}" class="${["pid", "cpu_pct", "rss_kb", "disk"].includes(k) ? "num" : ""}">${label}${procSort.key === k ? (procSort.dir < 0 ? " ↓" : " ↑") : ""}</th>`).join("")}<th></th></tr></thead><tbody>`;
+  let rows = "";
+  if (procTree && !q) {
+    const byParent = new Map();
+    const ids = new Set(list.map((pr) => pr.pid));
+    for (const pr of list) {
+      const parent = ids.has(pr.ppid) && pr.ppid !== pr.pid ? pr.ppid : 0;
+      if (!byParent.has(parent)) byParent.set(parent, []);
+      byParent.get(parent).push(pr);
+    }
+    const walk = (ppid, depth, seen) => {
+      for (const pr of sortedProcs(byParent.get(ppid) || [])) {
+        if (seen.has(pr.pid)) continue;
+        seen.add(pr.pid);
+        rows += procRow(pr, depth);
+        walk(pr.pid, depth + 1, seen);
+      }
+    };
+    walk(0, 0, new Set());
+  } else {
+    rows = sortedProcs(list).map((pr) => procRow(pr, 0)).join("");
+  }
+  el.innerHTML = head + rows + `</tbody></table>`;
+}
+
+async function endProcess(btn) {
+  const [pidS, startS] = btn.dataset.end.split(":");
+  const pid = Number(pidS), start = Number(startS);
+  const name = btn.dataset.name || `process ${pid}`;
+  const force = forceReady.has(btn.dataset.end);
+  const ok = await askConfirm(force ? `Force-end ${name}?` : `End ${name}?`,
+    force
+      ? `${name} (PID ${pid}) didn't quit when asked. Force-ending kills it on the spot — unsaved work in it is lost.`
+      : `Profiler will ask ${name} (PID ${pid}) to quit politely first. If it refuses, you can force it from this list.`,
+    force ? "Force end" : "End process", true);
+  if (!ok) return;
+  try {
+    const msg = await invoke("end_process", { pid, startTicks: start, force });
+    showToast(msg);
+    if (!force) forceReady.add(btn.dataset.end);
+    else forceReady.delete(btn.dataset.end);
+  } catch (e) {
+    showToast(String(e));
+    forceReady.delete(btn.dataset.end);
+  }
+}
+
+/* ---------------- History ---------------- */
+VIEWS.history = () =>
+  `<div class="card"><h3>What just happened</h3>
+   <p>This covers the time System Profiler has been open — up to the last 30 minutes. Drag the slider back to see what the machine was doing then, and which processes were busiest at that moment.</p>
+   <div class="row"><input type="range" class="hist-slider" id="histSlider" min="0" max="0" value="0">
+   <button type="button" class="pill secondary" id="histRefresh">Refresh</button>
+   <button type="button" class="pill primary" data-goto="live">Back to live</button></div>
+   <div id="histBody"><p class="empty">Reading the record…</p></div></div>`;
+
+async function fillHistory() {
+  try { histPoints = await invoke("get_history"); } catch (e) { histPoints = []; }
+  const slider = $("histSlider");
+  if (slider) { slider.max = Math.max(0, histPoints.length - 1); slider.value = slider.max; }
+  renderHistPoint(histPoints.length - 1);
+}
+
+function renderHistPoint(idx) {
+  const el = $("histBody");
+  if (!el) return;
+  if (!histPoints.length || idx < 0) {
+    el.innerHTML = `<p class="empty">Nothing recorded yet — the record starts when Profiler opens. Give it a few seconds.</p>`;
+    return;
+  }
+  const pt = histPoints[idx];
+  const when = new Date(pt.ts * 1000).toLocaleTimeString();
+  const ago = Math.max(0, Math.round(histPoints[histPoints.length - 1].ts - pt.ts));
+  const sparkAt = (get, maxV, label) => {
+    const upto = histPoints.slice(0, idx + 1);
+    return sparkSvg(upto, get, maxV, label);
+  };
+  el.innerHTML =
+    `<p><strong>${esc(when)}</strong> — ${ago === 0 ? "the latest look" : `${ago} seconds before the latest look`}</p>
+     <div class="live-grid">
+       <div><h4>CPU — ${pct1(pt.cpu_pct)}</h4>${sparkAt((q) => q.cpu_pct, 100, "CPU")}</div>
+       <div><h4>Memory — ${pct1(pt.mem_pct)}</h4>${sparkAt((q) => q.mem_pct, 100, "Memory")}</div>
+       <div><h4>Disk — ${rate(pt.disk_read_bps + pt.disk_write_bps)}</h4>${sparkAt((q) => q.disk_read_bps + q.disk_write_bps, null, "Disk")}</div>
+       <div><h4>Network — ${rate(pt.net_rx_bps + pt.net_tx_bps)}</h4>${sparkAt((q) => q.net_rx_bps + q.net_tx_bps, null, "Network")}</div>
+     </div>
+     <h4>Busiest at that moment</h4>
+     ${pt.top.map((tp) => `<p class="mono">${esc(tp.name)} (PID ${tp.pid}) — ${pct1(tp.cpu_pct)} cpu · ${gb(tp.rss_kb * 1024)}</p>`).join("") || `<p class="empty">No process data at that moment.</p>`}`;
+}
+
+/* ---------------- Services ---------------- */
+VIEWS.services = () =>
+  `<div id="svcResult"></div><div id="svcBody"><p class="empty">Reading services…</p></div>`;
+
+async function fillServices() {
+  let list;
+  try { list = await invoke("list_services"); }
+  catch (e) {
+    const el = $("svcBody");
+    if (el) el.innerHTML = `<p class="empty">${esc(String(e))}</p>`;
+    return;
+  }
+  const el = $("svcBody");
+  if (!el || current !== "services") return;
+  const res = $("svcResult");
+  if (res) res.innerHTML = svcResult
+    ? `<div class="card"><p>${esc(svcResult)}</p></div>` : "";
+  el.innerHTML = `<table class="proc-table"><thead><tr><th>Service</th><th>State</th><th>What it is</th><th></th></tr></thead><tbody>` +
+    list.map((sv) => {
+      const running = sv.active === "active";
+      const actions = running
+        ? `<button type="button" class="mini-btn" data-svc="stop:${esc(sv.name)}">Stop</button> <button type="button" class="mini-btn" data-svc="restart:${esc(sv.name)}">Restart</button>`
+        : `<button type="button" class="mini-btn" data-svc="start:${esc(sv.name)}">Start</button>`;
+      return `<tr><td class="mono">${esc(sv.name.replace(/\.service$/, ""))}</td>
+        <td>${running ? `<span class="chip">running</span>` : esc(sv.active)}</td>
+        <td>${esc(sv.description)}</td><td>${actions}</td></tr>`;
+    }).join("") + `</tbody></table>`;
+}
+
+async function serviceAction(btn) {
+  const [action, name] = btn.dataset.svc.split(/:(.+)/).filter(Boolean);
+  const verb = { start: "Start", stop: "Stop", restart: "Restart" }[action];
+  const ok = await askConfirm(`${verb} ${name.replace(/\.service$/, "")}?`,
+    `This asks the system to ${action} the ${name} service. It needs your admin password, and the result — good or bad — stays on this page.`,
+    verb, action !== "start");
+  if (!ok) return;
+  btn.disabled = true;
+  try { svcResult = await invoke("service_action", { name, action }); }
+  catch (e) { svcResult = String(e); }
+  fillServices();
+}
+
+/* ---------------- Startup ---------------- */
+VIEWS.startup = () =>
+  `<div class="card"><h3>What starts with your session</h3>
+   <p>Everything below launches on its own when you sign in. This version is a window, not a switchboard — turning entries off safely (with a way back) is coming in a later version.</p></div>
+   <div id="startupBody"><p class="empty">Looking…</p></div>`;
+
+async function fillStartup() {
+  let list;
+  try { list = await invoke("list_startup"); } catch (e) { list = []; }
+  const el = $("startupBody");
+  if (!el || current !== "startup") return;
+  if (!list.length) {
+    el.innerHTML = `<p class="empty">Nothing is set to start with your session — a clean desk.</p>`;
+    return;
+  }
+  el.innerHTML = list.map((en) =>
+    `<div class="card"><h3>${esc(en.name)}${en.hidden ? ` <span class="chip">switched off</span>` : ""}</h3>
+     <p>${esc(en.kind)} · from ${esc(en.source)}</p>
+     ${en.exec ? `<p class="mono">${esc(en.exec)}</p>` : ""}</div>`).join("");
+}
+
+/* ---------------- Updates failure cards ---------------- */
+async function fillFailureCards() {
+  let fails;
+  try { fails = await invoke("get_update_failures"); } catch (e) { return; }
+  const body = $("detailBody");
+  if (!body || current !== "updates" || !fails.length) return;
+  const old = $("failCards");
+  if (old) old.remove();
+  const div = document.createElement("div");
+  div.id = "failCards";
+  div.innerHTML = fails.map((f) => {
+    const when = new Date(f.when_unix * 1000).toLocaleString();
+    return `<div class="card fail-card"><h3>${esc(f.label)} update didn't finish</h3>
+      <p>${esc(f.headline)}</p>
+      <p class="empty">Failed ${esc(when)}. This note stays until the ${esc(f.label.toLowerCase())} update succeeds or you dismiss it.</p>
+      <details><summary>Details — what the system said</summary><pre class="log">${esc(f.detail)}</pre></details>
+      <div class="row"><button type="button" class="pill primary" data-fail-retry="${esc(f.group)}:${esc(f.kind)}">Try again</button>
+      <button type="button" class="pill secondary" data-fail-dismiss="${esc(f.group)}">Dismiss</button></div></div>`;
+  }).join("");
+  body.prepend(div);
+  div.querySelectorAll("[data-fail-dismiss]").forEach((b) => b.addEventListener("click", async () => {
+    await invoke("dismiss_update_failure", { group: b.dataset.failDismiss }).catch(() => {});
+    div.remove();
+  }));
+  div.querySelectorAll("[data-fail-retry]").forEach((b) => b.addEventListener("click", () => {
+    const [group, kind] = b.dataset.failRetry.split(":");
+    if (kind === "full-upgrade") applyFullUpgrade();
+    else applyGroup(group);
+  }));
+}
+
+/* ---------------- wireDetail wrap: the new views' controls ---------------- */
+const _wireDetailV090 = wireDetail;
+wireDetail = function () {
+  _wireDetailV090();
+  if (current === "processes") {
+    const f = $("procFilter");
+    if (f) f.addEventListener("input", () => { procFilter = f.value; renderProcBody(); });
+    const tb = $("procTreeBtn");
+    if (tb) tb.addEventListener("click", () => { procTree = !procTree; select("processes"); });
+    const body = $("procBody");
+    if (body) body.addEventListener("click", (ev) => {
+      const th = ev.target.closest("[data-sort]");
+      if (th) {
+        const k = th.dataset.sort;
+        if (k === "disk") return;
+        if (procSort.key === k) procSort.dir *= -1; else procSort = { key: k, dir: k === "name" || k === "user" ? 1 : -1 };
+        renderProcBody();
+        return;
+      }
+      const btn = ev.target.closest("[data-end]");
+      if (btn) endProcess(btn);
+    });
+  }
+  if (current === "history") {
+    const slider = $("histSlider");
+    if (slider) slider.addEventListener("input", () => renderHistPoint(Number(slider.value)));
+    const rf = $("histRefresh");
+    if (rf) rf.addEventListener("click", fillHistory);
+  }
+  if (current === "services") {
+    const body = $("svcBody");
+    if (body) body.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-svc]");
+      if (btn) serviceAction(btn);
+    });
+  }
+};
+
 /* ---------------- navigation ---------------- */
 function renderNav() {
   const counts = { storage: P.storage.length, pci: P.pci.length, usb: P.usb.length,
@@ -736,6 +1106,7 @@ function select(id) {
   wireDetail();
   $("app").classList.add("show-detail");
   if (id === "updates") maybeAutoRecount();
+  liveHooks(id);
 }
 
 function miniFlag(dot, html, goto) {
@@ -987,6 +1358,7 @@ async function applyGroup(group) {
   $("logStatus").textContent = "Running — new output appears below as it happens.";
   $("logBody").textContent = "";
   if (!$("logSheet").open) $("logSheet").showModal();
+  vizShow();
   let unlisten = null;
   try { /* progress can never block the update itself */
     unlisten = await listen("update-progress", (e) => {
@@ -1018,7 +1390,9 @@ async function applyGroup(group) {
     } else if (!$("logBody").textContent && report.output) {
       $("logBody").textContent = report.output;
     }
+    vizHide();
   } catch (e) {
+    vizSit();
     /* The backend error is composed: plain-language headline first, raw
        output behind a Details divider. REPLACE the body with it — the
        streamed lines are already inside the details, and v0.8.1's
@@ -1083,6 +1457,7 @@ async function applyFullUpgrade() {
   $("logStatus").textContent = "Running — new output appears below as it happens.";
   $("logBody").textContent = "";
   if (!$("logSheet").open) $("logSheet").showModal();
+  vizShow();
   let unlisten = null;
   try {
     unlisten = await listen("update-progress", (e) => {
@@ -1106,7 +1481,9 @@ async function applyFullUpgrade() {
     } else if (!$("logBody").textContent && report.output) {
       $("logBody").textContent = report.output;
     }
+    vizHide();
   } catch (e) {
+    vizSit();
     const msg = String(e);
     logMeta.headline = msg.split("\n")[0];
     $("logTitle").textContent = "Update failed";

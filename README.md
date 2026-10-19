@@ -3,8 +3,14 @@
 Apple's System Information, for Linux — plus the thing Apple never gave it:
 a single place to see and apply **driver, firmware, and software updates**.
 
-**Status: v0.8.11.** CLI core + Tauri GUI shipped and dogfooded on real
-hardware; under active development. v0.8.11 is the Vizsla style pass:
+**Status: v0.9.0 "Live Wire".** CLI core + Tauri GUI shipped and dogfooded
+on real hardware; under active development. v0.9.0 makes Profiler live:
+a Rust sampler (the webview only paints) drives new Live, Processes
+(end a process with pid+start-time identity re-verified at signal
+time), History (a 30-minute in-session scrub), Services and Startup
+views; failed updates now leave a persistent plain-English failure
+record with Retry; and a small vizsla keeps you company while updates
+run. Previously — v0.8.11, the Vizsla style pass:
 the GUI inherits the Vizsla OS Style Guide — one type system (Inter UI ·
 Fraunces display · Newsreader reading · Victor Mono data, OFL) and one
 kit button geometry in every theme (themes are palettes/materials

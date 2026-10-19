@@ -1,6 +1,6 @@
 [package]
 name = "linux-system-profiler-gui"
-version = "0.8.11"
+version = "0.9.0"
 edition = "2021"
 license = "MIT"
 description = "Linux System Profiler — Tauri GUI (Apple design language, adaptive layouts)"

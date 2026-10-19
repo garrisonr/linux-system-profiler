@@ -12,7 +12,7 @@ use linux_system_profiler::speedtest::{self, DiskSpeed, NetSpeed};
 use linux_system_profiler::{collect_profile, report, sanitize};
 use std::process::Command;
 use std::sync::Mutex;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 #[derive(Default)]
 struct ProfileCache(Mutex<Option<Profile>>);
@@ -433,12 +433,16 @@ async fn apply_updates(app: tauri::AppHandle, group: String) -> Result<linux_sys
     if APPLYING.swap(true, Ordering::SeqCst) {
         return Err("An update is already running — wait for it to finish.".to_string());
     }
-    let result = tauri::async_runtime::spawn_blocking(move || run_apply(&app, &group)).await;
+    let group2 = group.clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || run_apply(&app2, &group2)).await;
     APPLYING.store(false, Ordering::SeqCst);
-    match result {
+    let outcome = match result {
         Ok(r) => r,
         Err(e) => Err(format!("update task failed: {e}")),
-    }
+    };
+    note_apply_outcome(&app, &group, "group", &outcome);
+    outcome
 }
 
 /// v0.8.9 preflight for the "Install these too (full upgrade)" action:
@@ -464,15 +468,18 @@ async fn apply_full_upgrade(app: tauri::AppHandle) -> Result<linux_system_profil
     if APPLYING.swap(true, Ordering::SeqCst) {
         return Err("An update is already running — wait for it to finish.".to_string());
     }
+    let app2 = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let (prog, args) = linux_system_profiler::updates::full_upgrade_command();
-        run_apply_cmd(&app, "system-apt", prog, &args)
+        run_apply_cmd(&app2, "system-apt", prog, &args)
     }).await;
     APPLYING.store(false, Ordering::SeqCst);
-    match result {
+    let outcome = match result {
         Ok(r) => r,
         Err(e) => Err(format!("update task failed: {e}")),
-    }
+    };
+    note_apply_outcome(&app, "system-apt", "full-upgrade", &outcome);
+    outcome
 }
 
 /// The truth about an apply comes from RE-CHECKING the group, never
@@ -648,15 +655,148 @@ async fn recount_updates(cache: State<'_, ProfileCache>, renders: State<'_, Rend
     Ok(info)
 }
 
+
+// ------------------------------------------------------------ v0.9.0 live
+
+/// The live sampler's home. Time lives in Rust (house law): this thread
+/// samples /proc + /sys, keeps the history ring buffer, and emits
+/// "live-sample" events; the webview only paints what it is handed.
+/// Two lanes: fast (1 s) while a Live/Processes/History view is on
+/// screen, slow (4 s) otherwise — history keeps filling either way, and
+/// every point carries its real timestamp, so lane changes never fake
+/// density on the graphs.
+struct LiveState {
+    sampler: Mutex<linux_system_profiler::live::Sampler>,
+    history: Mutex<linux_system_profiler::live::History>,
+    fast_lane: std::sync::atomic::AtomicBool,
+}
+
+fn start_sampler(app: tauri::AppHandle, live: std::sync::Arc<LiveState>) {
+    std::thread::spawn(move || {
+        loop {
+            let fast = live.fast_lane.load(std::sync::atomic::Ordering::Relaxed);
+            let sample = live.sampler.lock().unwrap().sample();
+            live.history.lock().unwrap().push(&sample);
+            let _ = app.emit("live-sample", &sample);
+            std::thread::sleep(std::time::Duration::from_millis(if fast { 1000 } else { 4000 }));
+        }
+    });
+}
+
+#[tauri::command]
+fn set_live_lane(live: State<'_, std::sync::Arc<LiveState>>, fast: bool) {
+    live.fast_lane.store(fast, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn get_history(live: State<'_, std::sync::Arc<LiveState>>) -> Vec<linux_system_profiler::live::HistoryPoint> {
+    live.history.lock().unwrap().snapshot()
+}
+
+/// End a process — the (pid, start_ticks) pair is re-verified in the
+/// core at signal time; a recycled PID refuses instead of signalling
+/// a stranger.
+#[tauri::command]
+fn end_process(pid: u32, start_ticks: u64, force: bool) -> Result<String, String> {
+    linux_system_profiler::live::signal_process(pid, start_ticks, force)
+}
+
+#[tauri::command]
+async fn list_services() -> Result<Vec<linux_system_profiler::live::ServiceInfo>, String> {
+    tauri::async_runtime::spawn_blocking(linux_system_profiler::live::list_services)
+        .await.map_err(|e| format!("service list task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn service_action(name: String, action: String) -> Result<String, String> {
+    if !linux_system_profiler::live::valid_unit_name(&name)
+        || !matches!(action.as_str(), "start" | "stop" | "restart") {
+        return Err("That service action wasn't recognised — nothing was run.".into());
+    }
+    let verb = match action.as_str() { "start" => "Started", "stop" => "Stopped", _ => "Restarted" };
+    tauri::async_runtime::spawn_blocking(move || {
+        let args = vec!["systemctl".to_string(), action.clone(), name.clone()];
+        let out = linux_system_profiler::elevate::output(&args)
+            .map_err(|e| format!("couldn't start the service action: {e}"))?;
+        if out.status.success() {
+            return Ok(format!("{verb} {name}."));
+        }
+        let raw = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        Err(linux_system_profiler::elevate::failure_text(&raw, out.status.code()))
+    }).await.map_err(|e| format!("service task failed: {e}"))?
+}
+
+#[tauri::command]
+fn list_startup() -> Vec<linux_system_profiler::live::StartupEntry> {
+    linux_system_profiler::live::list_startup()
+}
+
+// -------------------------------------------- update failure records
+
+fn failures_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok()
+}
+
+fn group_label(group: &str) -> &'static str {
+    match group {
+        "firmware" => "Firmware",
+        "flatpak" => "Flatpak apps",
+        _ => "System packages",
+    }
+}
+
+fn note_apply_outcome(app: &tauri::AppHandle, group: &str, kind: &str, result: &Result<linux_system_profiler::updates::ApplyReport, String>) {
+    let Some(dir) = failures_dir(app) else { return };
+    match result {
+        Ok(_) => linux_system_profiler::updates::clear_update_failure(&dir, group),
+        Err(e) => {
+            let headline = e.lines().next().unwrap_or("The update didn't finish.").to_string();
+            linux_system_profiler::updates::record_update_failure(&dir, linux_system_profiler::updates::UpdateFailure {
+                group: group.to_string(),
+                kind: kind.to_string(),
+                label: group_label(group).to_string(),
+                when_unix: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+                headline,
+                detail: e.clone(),
+            });
+        }
+    }
+}
+
+#[tauri::command]
+fn get_update_failures(app: tauri::AppHandle) -> Vec<linux_system_profiler::updates::UpdateFailure> {
+    failures_dir(&app).map(|d| linux_system_profiler::updates::load_update_failures(&d)).unwrap_or_default()
+}
+
+#[tauri::command]
+fn dismiss_update_failure(app: tauri::AppHandle, group: String) {
+    if let Some(dir) = failures_dir(&app) {
+        linux_system_profiler::updates::clear_update_failure(&dir, &group);
+    }
+}
+
 fn main() {
+    let live = std::sync::Arc::new(LiveState {
+        sampler: Mutex::new(linux_system_profiler::live::Sampler::new()),
+        history: Mutex::new(linux_system_profiler::live::History::default()),
+        fast_lane: std::sync::atomic::AtomicBool::new(false),
+    });
+    let live_for_setup = live.clone();
     tauri::Builder::default()
         .manage(ProfileCache::default())
         .manage(RenderCache::default())
+        .manage(live)
+        .setup(move |app| {
+            start_sampler(app.handle().clone(), live_for_setup.clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_profile, get_dep_status, install_deps, copy_forum,
             share_copy, share_save, share_email, copy_text, open_url,
             run_disk_test, run_network_test, apply_updates, elevated_dmi,
-            refresh_update_check, recount_updates, full_upgrade_preflight, apply_full_upgrade
+            refresh_update_check, recount_updates, full_upgrade_preflight, apply_full_upgrade,
+            set_live_lane, get_history, end_process, list_services, service_action,
+            list_startup, get_update_failures, dismiss_update_failure
         ])
         .run(tauri::generate_context!())
         .expect("error while running Linux System Profiler");
