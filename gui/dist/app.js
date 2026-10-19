@@ -259,6 +259,109 @@ function kvTable(rows) {
 function cards(items, render) {
   return items.length ? items.map(render).join("") : `<p class="empty">Nothing detected.</p>`;
 }
+/* ---------------- Collapsible groups (v0.9.2, crew Neat Freak) --------
+   ONE component app-wide. Static views render <details class="grp">
+   via grpDetails(); live views render .grp-sec sections via grpSec()
+   with open/closed kept in JS state so a collapse survives the 1 Hz
+   re-render. State persists across relaunches in localStorage — the
+   same mechanism the theme choice uses ("lsp-theme"). A collapsed
+   header always carries its count: the summary stays honest, and one
+   expand always reaches everything (drill-down terminates). */
+const GROUP_STORE = "lsp-groups-v092";
+let groupState = {};
+try { groupState = JSON.parse(localStorage.getItem(GROUP_STORE) || "{}") || {}; } catch (e) { groupState = {}; }
+function groupIsOpen(key, def) { return key in groupState ? !!groupState[key] : !!def; }
+function groupSet(key, open) {
+  groupState[key] = !!open;
+  try { localStorage.setItem(GROUP_STORE, JSON.stringify(groupState)); } catch (e) {}
+}
+/* Static group: <details> whose open attribute seeds from state; the
+   document-level toggle listener below records every user flip. */
+function grpDetails(key, title, count, bodyHtml, defOpen, opts) {
+  const o = opts || {};
+  const cls = o.inner ? "grp grp-inner" : "card grp";
+  const note = o.note ? ` <span class="grp-note">\u2014 ${esc(o.note)}</span>` : "";
+  return `<details class="${cls}" data-grp="${esc(key)}"${groupIsOpen(key, defOpen) ? " open" : ""}>` +
+    `<summary><span class="grp-chev" aria-hidden="true"></span><span class="grp-title">${esc(title)}</span>` +
+    (count != null ? ` <span class="grp-count">(${count})</span>` : "") + `${note}</summary>` +
+    `<div class="grp-body">${bodyHtml}</div></details>`;
+}
+/* Live group: a section whose body exists only while open. The header
+   is a real button; the delegated click handler below flips state and
+   re-renders the owning view. */
+function grpSec(key, title, count, bodyHtml, defOpen, note) {
+  const open = groupIsOpen(key, defOpen);
+  return `<div class="grp-sec"><button type="button" class="grp-head" data-grp-toggle="${esc(key)}" aria-expanded="${open}">` +
+    `<span class="grp-chev" aria-hidden="true"></span><span class="grp-title">${esc(title)}</span> ` +
+    (count != null ? ` <span class="grp-count">(${count})</span>` : "") + `${note ? ` <span class="grp-note">${note}</span>` : ""}</button>` +
+    (open ? `<div class="grp-body">${bodyHtml}</div>` : "") + `</div>`;
+}
+/* Quiet Expand all / Collapse all row for views with >= 3 groups. */
+function grpTools(keys) {
+  const k = keys.join(",");
+  return `<div class="grp-tools"><button type="button" class="mini-btn" data-grp-all="open" data-keys="${esc(k)}">Expand all</button>` +
+    `<button type="button" class="mini-btn" data-grp-all="close" data-keys="${esc(k)}">Collapse all</button></div>`;
+}
+function grpRerender() {
+  if (current === "processes") renderProcBody();
+  else if (current === "services") fillServices();
+  else if (current === "live") renderLiveBody();
+  else select(current);
+}
+document.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (d && d.matches && d.matches("details[data-grp]")) groupSet(d.dataset.grp, d.open);
+}, true);
+document.addEventListener("click", (e) => {
+  const all = e.target.closest("[data-grp-all]");
+  if (all) {
+    const open = all.dataset.grpAll === "open";
+    all.dataset.keys.split(",").filter(Boolean).forEach((k) => groupSet(k, open));
+    grpRerender();
+    return;
+  }
+  const t = e.target.closest("[data-grp-toggle]");
+  if (t) {
+    groupSet(t.dataset.grpToggle, t.getAttribute("aria-expanded") !== "true");
+    grpRerender();
+  }
+});
+/* Letter ranges for long name lists (Software): bucket by first
+   letter, then merge ADJACENT buckets until adding another would pass
+   ~40 — a single dense letter may stand alone above 40 (documented:
+   the range is the summary, the count stays exact). */
+function letterGroups(items, nameOf) {
+  const sorted = [...items].sort((a, b) => nameOf(a).toLowerCase().localeCompare(nameOf(b).toLowerCase()));
+  const buckets = new Map();
+  for (const it of sorted) {
+    const c = (nameOf(it).trim().charAt(0) || "#").toUpperCase();
+    const k = /[A-Z]/.test(c) ? c : "#";
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(it);
+  }
+  const keys = [...buckets.keys()].sort((a, b) => a === "#" ? -1 : b === "#" ? 1 : a.localeCompare(b));
+  const groups = [];
+  let cur = null;
+  for (const k of keys) {
+    const bucket = buckets.get(k);
+    if (!cur) cur = { from: k, to: k, items: [...bucket] };
+    else if (cur.items.length + bucket.length <= 40) { cur.to = k; cur.items.push(...bucket); }
+    else { groups.push(cur); cur = { from: k, to: k, items: [...bucket] }; }
+  }
+  if (cur) groups.push(cur);
+  return groups.map((g) => ({ label: g.from === g.to ? g.from : g.from + "\u2013" + g.to, items: g.items }));
+}
+/* Process ownership groups (Processes flat view). Kernel threads are
+   the rows with no userspace memory at all: live.rs substitutes the
+   comm for their (empty) cmdline, so brackets never reach us — the
+   honest signals in the data are rss 0 + ppid 0/2 (children of
+   kthreadd), excluding zombies (state Z), which are dying userspace. */
+function procGroupOf(pr, selfUser) {
+  if (pr.rss_kb === 0 && pr.ppid <= 2 && !String(pr.state || "").startsWith("Z")) return "kernel";
+  if (selfUser && pr.user === selfUser) return "yours";
+  return "system";
+}
+
 const FLAG_GOTO = { Security: "accounts", Storage: "storage", Updates: "updates", Firmware: "updates",
   Battery: "power", Memory: "memory", System: "overview" };
 function flagHtml(f) {
@@ -394,7 +497,11 @@ const VIEWS = {
     return h;
   },
   storage(p) {
-    let h = cards(p.storage, (d) => {
+    /* v0.9.2: devices with nothing mounted (the USB-enclosure swarm
+       of "Generic DISK" units) fold into one collapsed Not mounted
+       group with the unmounted partitions; mounted drives keep
+       their open cards, exactly as before. */
+    const devCard = (d) => {
       const parts = [gb(d.size_bytes), d.tran || (d.name.startsWith("nvme") ? "NVMe" : null),
         d.rotational ? "rotational (HDD)" : "solid state",
         d.mountpoints && d.mountpoints.length ? "mounted " + d.mountpoints.join(", ") : null].filter(Boolean);
@@ -405,7 +512,18 @@ const VIEWS = {
         ...smartTail].filter(Boolean).join(" · ");
       return `<div class="card"><h3>${esc(d.name)} — ${esc(d.model)}</h3><p>${parts.join(" · ")}</p>` +
         (smartLine ? `<p>${smartLine}</p>` : "") + `</div>`;
-    });
+    };
+    const mounted = p.storage.filter((d) => d.mountpoints && d.mountpoints.length);
+    const unmounted = p.storage.filter((d) => !(d.mountpoints && d.mountpoints.length));
+    const unmountedParts = (p.disk_partitions || []).filter((d) => !d.mount);
+    let h = mounted.length ? cards(mounted, devCard)
+      : (unmounted.length || unmountedParts.length ? "" : cards([], devCard));
+    const notMountedBody = unmounted.map(devCard).join("") +
+      unmountedParts.map((d) =>
+        `<p class="mono">${esc(d.device)} · ${gb(d.size_bytes)}${d.fs_type ? " · " + esc(d.fs_type) : " · no filesystem"} · not mounted</p>`).join("");
+    if (unmounted.length || unmountedParts.length)
+      h += grpDetails("storage:notmounted", "Not mounted", unmounted.length + unmountedParts.length,
+        notMountedBody, false, { note: "drives & partitions with nothing mounted" });
     if (p.volumes.length) {
       // Deduplicate by physical device: a Btrfs pool mounts many subvolumes
       // from ONE device — present the pool once, subvolumes nested under it.
@@ -474,7 +592,12 @@ const VIEWS = {
       <div class="row"><button class="pill primary" data-speed="net" type="button">Run network test</button>
       <span class="speed-final"></span></div></div>`;
     h += real.length ? real.map(row).join("") : `<p class="empty">No physical interfaces detected.</p>`;
-    if (virt.length) h += `<h3>Virtual interfaces${hintBtn("virtual")}</h3>` + virt.map(row).join("");
+    /* v0.9.2: Docker hosts grow veth weeds — past 4, virtual
+       interfaces fold into the shared group (count on the header);
+       at 4 or fewer they stay open exactly as before. */
+    if (virt.length > 4) h += grpDetails("network:virtual", "Virtual interfaces", virt.length,
+      virt.map(row).join(""), false, { note: "bridges, VPNs & container links" });
+    else if (virt.length) h += `<h3>Virtual interfaces${hintBtn("virtual")}</h3>` + virt.map(row).join("");
     return h;
   },
   power(p) {
@@ -518,13 +641,23 @@ const VIEWS = {
 
   pci(p) {
     const order = ["Graphics & Displays", "Networking", "Storage", "Audio & Multimedia", "Peripherals & USB", "System & Bridges", "Other"];
+    /* v0.9.2: the USB pattern, spread. The devices a person means
+       (graphics, networking, storage) open; the plumbing (System &
+       Bridges — the PCI twin of USB's Internal Controllers) and the
+       long tails start folded. A category of <= 3 always opens: a
+       fold must earn its keep. State persists (grpDetails). */
+    const openDefault = new Set(["Graphics & Displays", "Networking", "Storage"]);
     const groups = new Map();
     for (const d of p.pci) { const k = d.category || "Other"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(d); }
-    let h = "";
-    for (const k of order) {
-      if (!groups.has(k)) continue;
-      h += `<h3>${esc(k)} (${groups.get(k).length})</h3><table class="kv">${groups.get(k).map((d) =>
+    const present = order.filter((k) => groups.has(k));
+    let h = present.length >= 3 ? grpTools(present.map((k) => "pci:" + k)) : "";
+    for (const k of present) {
+      const items = groups.get(k);
+      const table = `<table class="kv">${items.map((d) =>
         `<tr><th class="mono">${esc(d.id)}</th><td>${esc(d.description)}${d.driver ? " · " + esc(d.driver) : ""}</td></tr>`).join("")}</table>`;
+      h += grpDetails("pci:" + k, k, items.length, table,
+        openDefault.has(k) || items.length <= 3,
+        k === "System & Bridges" ? { note: "chipset & plumbing" } : undefined);
     }
     return h || `<p class="empty">No PCI devices detected.</p>`;
   },
@@ -537,8 +670,8 @@ const VIEWS = {
     let h = "";
     for (const k of open) if (groups.has(k)) h += `<h3>${esc(k)} (${groups.get(k).length})</h3>` + table(groups.get(k));
     if (groups.has("Internal Controllers"))
-      h += `<details class="card"><summary>Internal Controllers (${groups.get("Internal Controllers").length}) — root hubs & host controllers</summary>` +
-        table(groups.get("Internal Controllers")) + `</details>`;
+      h += grpDetails("usb:Internal Controllers", "Internal Controllers", groups.get("Internal Controllers").length,
+        table(groups.get("Internal Controllers")), false, { note: "root hubs & host controllers" });
     return h || `<p class="empty">No USB devices detected.</p>`;
   },
   software(p) {
@@ -553,17 +686,38 @@ const VIEWS = {
       ["Last full upgrade", p.software.last_upgrade],
       ["Modules (sample)", p.software.loaded_modules_sample.join(", ")],
     ]);
-    const details = (title, items, render) => items.length
-      ? `<details class="card"><summary>${esc(title)} (${items.length})</summary>` + items.map(render).join("") + `</details>` : "";
+    /* v0.9.2: by-type groups are the shared component now, and any
+       list past ~40 gets letter ranges inside (letterGroups) so a
+       fold always lands somewhere finite. Explicit packages are
+       ALWAYS letter-ranged (hundreds on real machines); Flatpak /
+       Snap / Docker only when they actually grow past 40. */
+    const details = (key, title, items, render, nameOf) => {
+      if (!items.length) return "";
+      let body;
+      if (items.length > 40) {
+        body = letterGroups(items, nameOf).map((g) =>
+          grpDetails(`${key}:${g.label}`, g.label, g.items.length,
+            g.items.map(render).join(""), false, { inner: true })).join("");
+      } else body = items.map(render).join("");
+      return grpDetails(key, title, items.length, body, false);
+    };
+    const letterKeys = (key, items, nameOf) => items.length > 40
+      ? letterGroups(items, nameOf).map((g) => `${key}:${g.label}`) : [];
+    const swKeys = ["sw:explicit", "sw:flatpaks", "sw:snaps", "sw:docker",
+      ...letterKeys("sw:explicit", p.software.explicit_packages, (x) => x.name),
+      ...letterKeys("sw:flatpaks", p.software.flatpaks_list, (x) => x.name),
+      ...letterKeys("sw:snaps", p.software.snaps, (x) => x.name),
+      ...letterKeys("sw:docker", p.software.docker_images, (x) => x.repository_tag)];
     h += `<h3>Installed software, by type</h3>`;
-    h += details("System packages — explicitly installed", p.software.explicit_packages,
-      (x) => `<p class="mono">${esc(x.name)} ${esc(x.version)}</p>`);
-    h += details("Flatpaks", p.software.flatpaks_list,
-      (x) => `<p class="mono">${esc(x.name)} ${esc(x.version)}</p>`);
-    h += details("Snaps", p.software.snaps,
-      (x) => `<p class="mono">${esc(x.name)} ${esc(x.version)}${x.publisher ? " · " + esc(x.publisher) : ""}</p>`);
-    h += details("Docker images", p.software.docker_images,
-      (x) => `<p class="mono">${esc(x.repository_tag)} ${esc(x.size)}</p>`);
+    h += grpTools(swKeys);
+    h += details("sw:explicit", "System packages — explicitly installed", p.software.explicit_packages,
+      (x) => `<p class="mono">${esc(x.name)} ${esc(x.version)}</p>`, (x) => x.name);
+    h += details("sw:flatpaks", "Flatpaks", p.software.flatpaks_list,
+      (x) => `<p class="mono">${esc(x.name)} ${esc(x.version)}</p>`, (x) => x.name);
+    h += details("sw:snaps", "Snaps", p.software.snaps,
+      (x) => `<p class="mono">${esc(x.name)} ${esc(x.version)}${x.publisher ? " · " + esc(x.publisher) : ""}</p>`, (x) => x.name);
+    h += details("sw:docker", "Docker images", p.software.docker_images,
+      (x) => `<p class="mono">${esc(x.repository_tag)} ${esc(x.size)}</p>`, (x) => x.repository_tag);
     if (!p.software.explicit_packages.length && !p.software.flatpaks_list.length && !p.software.snaps.length && !p.software.docker_images.length)
       h += `<p class="empty">No itemized software found.</p>`;
     return h;
@@ -642,16 +796,34 @@ const VIEWS = {
        a banner (.update-note), never prose wrapped in a chip. */
     const group = (title, items, key, danger, hintKey) => {
       const installable = items.filter((u) => u.status !== "blocked");
+      /* v0.8.9: versions AND the plain-English state — the note
+         used to REPLACE the versions, and apt rows carried no
+         versions at all ("None -> None" in the text profile). */
+      const rowHtml = (u) => {
+        const ver = u.current && u.available ? ` ${esc(u.current)} → ${esc(u.available)}` : "";
+        return `<p class="mono">${esc(u.name)}${ver}</p>` +
+          (u.note ? `<p class="update-note">${esc(u.note)}</p>` : "");
+      };
+      /* v0.9.2 calm cap: first 10 visible, the rest in a nested
+         "…and N more" fold. Items that can't install yet (blocked /
+         kept_back) are HOISTED into the visible head — an explanation
+         is never the thing buried by the cap (Plain Talk). If the
+         fold still holds any, its header says so out loud. The cap
+         only engages when the fold would hold more than 2. */
+      const CAP = 10;
+      const needsEyes = (u) => u.status === "blocked" || u.status === "kept_back";
+      const ordered = [...items.filter(needsEyes), ...items.filter((u) => !needsEyes(u))];
+      let shown = ordered, more = [];
+      if (ordered.length > CAP + 2) { shown = ordered.slice(0, CAP); more = ordered.slice(CAP); }
+      const stuck = more.filter(needsEyes).length;
+      const listHtml = shown.map(rowHtml).join("") + (more.length
+        ? grpDetails("upd:" + key, `…and ${more.length} more`, null,
+            more.map(rowHtml).join(""), false,
+            { inner: true, note: stuck ? `includes ${stuck} that can't install yet` : undefined })
+        : "");
       return `<div class="card"><h3>${esc(title)}${hintKey ? hintBtn(hintKey) : ""} — ${items.length} available</h3>` +
       (items.length
-        ? items.slice(0, 60).map((u) => {
-          /* v0.8.9: versions AND the plain-English state — the note
-             used to REPLACE the versions, and apt rows carried no
-             versions at all ("None -> None" in the text profile). */
-          const ver = u.current && u.available ? ` ${esc(u.current)} → ${esc(u.available)}` : "";
-          return `<p class="mono">${esc(u.name)}${ver}</p>` +
-            (u.note ? `<p class="update-note">${esc(u.note)}</p>` : "");
-        }).join("") +
+        ? listHtml +
           (installable.length
             ? `<div class="row"><button class="pill ${danger ? "danger" : "primary"}" data-apply="${key}" type="button">Apply ${esc(title)} updates</button></div>`
             : `<p>Nothing here can install yet — each update above says what it's waiting for. The apply button comes back when one of them can.</p>`)
@@ -710,6 +882,7 @@ let procSort = { key: "cpu_pct", dir: -1 };
 const forceReady = new Set(); // "pid:start" pairs that ignored a polite quit
 let histPoints = [];
 let svcResult = null;
+let svcFilter = "";
 
 const rate = (b) => b == null ? "—" : b >= 1048576 ? (b / 1048576).toFixed(1) + " MiB/s"
   : b >= 1024 ? (b / 1024).toFixed(0) + " KiB/s" : b + " B/s";
@@ -842,7 +1015,11 @@ function renderLiveBody() {
       <div class="card"><h3>Network — ${rate(s.net_rx_bps + s.net_tx_bps)}</h3>${sparkSvg(liveTrail, (pt) => pt.net, null, "Network history")}
         <p>Down ${rate(s.net_rx_bps)} · Up ${rate(s.net_tx_bps)}</p></div>
     </div>
-    <div class="card"><h3>Per core</h3>${cores || `<p class="empty">Per-core data isn't available.</p>`}</div>
+    ${s.cores.length <= 8
+      ? `<div class="card"><h3>Per core</h3>${cores || `<p class="empty">Per-core data isn't available.</p>`}</div>`
+      : grpSec("live:cores", "Per core", s.cores.length,
+          cores || `<p class="empty">Per-core data isn't available.</p>`, false,
+          `\u2014 overall ${pct1(s.cpu_pct)}`)}
     <div class="card"><h3>Busiest right now</h3>
       ${top.map((pr) => `<p class="mono">${esc(pr.name)} — ${pct1(pr.cpu_pct)} cpu · ${gb(pr.rss_kb * 1024)}</p>`).join("") || `<p class="empty">Nothing to show yet.</p>`}
       <p class="empty">Heat & power: ${temps}${s.power_w != null ? ` · package power ${s.power_w.toFixed(1)} W` : " · Power draw isn't exposed on this machine."}</p>
@@ -857,6 +1034,7 @@ VIEWS.processes = () =>
      <button type="button" class="pill ${procTree ? "primary" : "secondary"}" id="procTreeBtn">${procTree ? "Tree: on" : "Tree: off"}</button>
      <span class="empty" id="procCount"></span>
    </div>
+   ${grpTools(["proc:yours", "proc:system", "proc:kernel"])}
    <div id="procBody"><p class="empty">Collecting the first look…</p></div>`;
 
 function sortedProcs(list) {
@@ -912,8 +1090,28 @@ function renderProcBody() {
       }
     };
     walk(0, 0, new Set());
-  } else {
+  } else if (q) {
+    /* A filter is a promise: every match visible, nothing hiding
+       behind a folded header. Grouping flattens while it is active. */
     rows = sortedProcs(list).map((pr) => procRow(pr, 0)).join("");
+  } else {
+    /* v0.9.2: flat mode groups by ownership — yours first and open,
+       system and kernel threads folded (procGroupOf). Sort applies
+       within each group; open/closed lives in group state, so a fold
+       survives the 1 Hz re-render. */
+    const selfProc = list.find((pr) => liveSample && pr.pid === liveSample.self_pid);
+    const selfUser = selfProc ? selfProc.user : null;
+    const buckets = { yours: [], system: [], kernel: [] };
+    for (const pr of list) buckets[procGroupOf(pr, selfUser)].push(pr);
+    rows = [["yours", "Your processes", true], ["system", "System processes", false], ["kernel", "Kernel threads", false]]
+      .map(([gk, label, def]) => {
+        const items = sortedProcs(buckets[gk]);
+        if (!items.length) return "";
+        const open = groupIsOpen("proc:" + gk, def);
+        return `<tr class="grp-row"><td colspan="8"><button type="button" class="grp-head" data-grp-toggle="proc:${gk}" aria-expanded="${open}">` +
+          `<span class="grp-chev" aria-hidden="true"></span><span class="grp-title">${label}</span> <span class="grp-count">(${items.length})</span></button></td></tr>` +
+          (open ? items.map((pr) => procRow(pr, 0)).join("") : "");
+      }).join("");
   }
   el.innerHTML = head + rows + `</tbody></table>`;
 }
@@ -984,7 +1182,11 @@ function renderHistPoint(idx) {
 
 /* ---------------- Services ---------------- */
 VIEWS.services = () =>
-  `<div id="svcResult"></div><div id="svcBody"><p class="empty">Reading services…</p></div>`;
+  `<div class="row proc-controls">
+     <input type="search" class="text-input" id="svcFilter" placeholder="Filter by name or description…" value="${esc(svcFilter)}">
+   </div>
+   ${grpTools(["svc:failed", "svc:running", "svc:notrunning"])}
+   <div id="svcResult"></div><div id="svcBody"><p class="empty">Reading services…</p></div>`;
 
 async function fillServices() {
   let list;
@@ -999,16 +1201,38 @@ async function fillServices() {
   const res = $("svcResult");
   if (res) res.innerHTML = svcResult
     ? `<div class="card"><p>${esc(svcResult)}</p></div>` : "";
-  el.innerHTML = `<table class="proc-table"><thead><tr><th>Service</th><th>State</th><th>What it is</th><th></th></tr></thead><tbody>` +
-    list.map((sv) => {
-      const running = sv.active === "active";
-      const actions = running
-        ? `<button type="button" class="mini-btn" data-svc="stop:${esc(sv.name)}">Stop</button> <button type="button" class="mini-btn" data-svc="restart:${esc(sv.name)}">Restart</button>`
-        : `<button type="button" class="mini-btn" data-svc="start:${esc(sv.name)}">Start</button>`;
-      return `<tr><td class="mono">${esc(sv.name.replace(/\.service$/, ""))}</td>
-        <td>${running ? `<span class="chip">running</span>` : esc(sv.active)}</td>
-        <td>${esc(sv.description)}</td><td>${actions}</td></tr>`;
-    }).join("") + `</tbody></table>`;
+  const svcRow = (sv) => {
+    const running = sv.active === "active";
+    const actions = running
+      ? `<button type="button" class="mini-btn" data-svc="stop:${esc(sv.name)}">Stop</button> <button type="button" class="mini-btn" data-svc="restart:${esc(sv.name)}">Restart</button>`
+      : `<button type="button" class="mini-btn" data-svc="start:${esc(sv.name)}">Start</button>`;
+    return `<tr><td class="mono">${esc(sv.name.replace(/\.service$/, ""))}</td>
+      <td>${running ? `<span class="chip">running</span>` : esc(sv.active)}</td>
+      <td>${esc(sv.description)}</td><td>${actions}</td></tr>`;
+  };
+  const svcTable = (items) => `<table class="proc-table"><thead><tr><th>Service</th><th>State</th><th>What it is</th><th></th></tr></thead><tbody>` +
+    items.map(svcRow).join("") + `</tbody></table>`;
+  /* v0.9.2: grouped by state. Failed opens (genuine attention, and
+     when there are none the group is simply absent — no empty fold
+     to open). Running starts FOLDED: it is ~100 rows, the exact wall
+     this release exists to fold; its header count, the summary line
+     and the filter carry the surface, and his own flip persists.
+     Not running folded. A filter flattens, same rule as Processes:
+     a match never hides behind a folded header. */
+  const failed = list.filter((sv) => sv.active === "failed");
+  const running = list.filter((sv) => sv.active === "active");
+  const notRunning = list.filter((sv) => sv.active !== "failed" && sv.active !== "active");
+  const summary = `<p class="svc-summary">${list.length} services — ${failed.length} failed · ${running.length} running · ${notRunning.length} not running</p>`;
+  const q = svcFilter.trim().toLowerCase();
+  if (q) {
+    const hits = list.filter((sv) => sv.name.toLowerCase().includes(q) || (sv.description || "").toLowerCase().includes(q));
+    el.innerHTML = summary + (hits.length ? svcTable(hits) : `<p class="empty">No service matches “${esc(svcFilter.trim())}”.</p>`);
+    return;
+  }
+  el.innerHTML = summary +
+    (failed.length ? grpSec("svc:failed", "Failed", failed.length, svcTable(failed), true) : "") +
+    grpSec("svc:running", "Running", running.length, svcTable(running), false) +
+    grpSec("svc:notrunning", "Not running", notRunning.length, svcTable(notRunning), false);
 }
 
 async function serviceAction(btn) {
@@ -1039,10 +1263,23 @@ async function fillStartup() {
     el.innerHTML = `<p class="empty">Nothing is set to start with your session — a clean desk.</p>`;
     return;
   }
-  el.innerHTML = list.map((en) =>
+  /* v0.9.2: grouped by source. Your sign-in apps stay open — they are
+     the point of the view; system sign-in apps and user services
+     fold. Empty groups are omitted, never shown as empty folds. */
+  const entryCard = (en) =>
     `<div class="card"><h3>${esc(en.name)}${en.hidden ? ` <span class="chip">switched off</span>` : ""}</h3>
      <p>${esc(en.kind)} · from ${esc(en.source)}</p>
-     ${en.exec ? `<p class="mono">${esc(en.exec)}</p>` : ""}</div>`).join("");
+     ${en.exec ? `<p class="mono">${esc(en.exec)}</p>` : ""}</div>`;
+  const yours = list.filter((en) => en.kind === "Application" && en.source === "Your autostart folder");
+  const systemApps = list.filter((en) => en.kind === "Application" && en.source !== "Your autostart folder");
+  const userSvcs = list.filter((en) => en.kind === "User service");
+  let h = "";
+  if (yours.length) h += `<h3>Your sign-in apps (${yours.length})</h3>` + yours.map(entryCard).join("");
+  if (systemApps.length) h += grpDetails("startup:system", "System sign-in apps", systemApps.length,
+    systemApps.map(entryCard).join(""), false);
+  if (userSvcs.length) h += grpDetails("startup:usersvc", "User services", userSvcs.length,
+    userSvcs.map(entryCard).join(""), false);
+  el.innerHTML = h;
 }
 
 /* ---------------- Updates failure cards ---------------- */
@@ -1113,6 +1350,8 @@ wireDetail = function () {
     if (rf) rf.addEventListener("click", fillHistory);
   }
   if (current === "services") {
+    const sf = $("svcFilter");
+    if (sf) sf.addEventListener("input", () => { svcFilter = sf.value; fillServices(); });
     const body = $("svcBody");
     // pointerdown for the same re-render reason as the Processes table.
     if (body) body.addEventListener("pointerdown", (ev) => {

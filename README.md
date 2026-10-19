@@ -3,8 +3,13 @@
 Apple's System Information, for Linux — plus the thing Apple never gave it:
 a single place to see and apply **driver, firmware, and software updates**.
 
-**Status: v0.9.1.** CLI core + Tauri GUI shipped and dogfooded
-on real hardware; under active development. v0.9.1 takes over the
+**Status: v0.9.2 "Accordion".** CLI core + Tauri GUI shipped and dogfooded
+on real hardware; under active development. v0.9.2 folds the long
+lists: one collapsible-group component (the USB pattern, spread
+app-wide) groups PCI devices by category, Processes by ownership,
+Services by state, Software by letter ranges, Startup by source —
+counts stay on the folded headers, filters flatten groups so a
+match never hides, and open/closed choices persist. v0.9.1 takes over the
 Power Statistics seat: the Power view now covers every UPower device
 (batteries, UPSes, wireless peripherals) with per-device detail and
 the recorded power history UPower keeps. v0.9.0 "Live Wire" made Profiler live:
