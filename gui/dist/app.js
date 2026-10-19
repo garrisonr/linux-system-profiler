@@ -513,8 +513,16 @@ const VIEWS = {
       return `<div class="card"><h3>${esc(d.name)} — ${esc(d.model)}</h3><p>${parts.join(" · ")}</p>` +
         (smartLine ? `<p>${smartLine}</p>` : "") + `</div>`;
     };
-    const mounted = p.storage.filter((d) => d.mountpoints && d.mountpoints.length);
-    const unmounted = p.storage.filter((d) => !(d.mountpoints && d.mountpoints.length));
+    /* A disk is "mounted" when it carries a mount itself OR any of
+       its partitions does (volumes / disk_partitions are the proof —
+       lsblk reports mountpoints per node, and a whole disk whose
+       partitions host the system shows none at its own level; folding
+       the system SSD would be a lie). */
+    const diskMounted = (d) => (d.mountpoints && d.mountpoints.length)
+      || (p.volumes || []).some((v) => (v.device || "").startsWith("/dev/" + d.name))
+      || (p.disk_partitions || []).some((pt) => pt.mount && (pt.device || "").startsWith("/dev/" + d.name));
+    const mounted = p.storage.filter(diskMounted);
+    const unmounted = p.storage.filter((d) => !diskMounted(d));
     const unmountedParts = (p.disk_partitions || []).filter((d) => !d.mount);
     let h = mounted.length ? cards(mounted, devCard)
       : (unmounted.length || unmountedParts.length ? "" : cards([], devCard));
