@@ -94,6 +94,10 @@ pub fn tree_text(p: &Profile) -> String {
     s += "├─ Power\n";
     for b in &p.power { s += &format!("│    ├─ {} {}% health:{}\n", b.name, b.capacity_percent.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
         b.health_percent.map(|h| format!("{h:.0}%")).unwrap_or_else(|| "—".into())); }
+    for d in &p.upower_devices { s += &format!("│    ├─ {} ({}) {} {}\n", d.label, d.kind,
+        d.state.clone().unwrap_or_default(), d.percentage.map(|v| format!("{v:.0}%")).unwrap_or_default()); }
+    for hst in &p.power_history { s += &format!("│    ├─ history {} — charge {} pts · rate {} pts · time-empty {} pts · time-full {} pts\n",
+        hst.label, hst.charge.len(), hst.rate.len(), hst.time_empty.len(), hst.time_full.len()); }
     s += &format!("├─ PCI devices  {}\n", p.pci.len());
     s += &format!("├─ USB devices  {}\n", p.usb.len());
     if !p.software.snaps.is_empty() || !p.software.docker_images.is_empty() || p.software.docker_status.is_some() {

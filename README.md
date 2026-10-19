@@ -3,8 +3,11 @@
 Apple's System Information, for Linux — plus the thing Apple never gave it:
 a single place to see and apply **driver, firmware, and software updates**.
 
-**Status: v0.9.0 "Live Wire".** CLI core + Tauri GUI shipped and dogfooded
-on real hardware; under active development. v0.9.0 makes Profiler live:
+**Status: v0.9.1.** CLI core + Tauri GUI shipped and dogfooded
+on real hardware; under active development. v0.9.1 takes over the
+Power Statistics seat: the Power view now covers every UPower device
+(batteries, UPSes, wireless peripherals) with per-device detail and
+the recorded power history UPower keeps. v0.9.0 "Live Wire" made Profiler live:
 a Rust sampler (the webview only paints) drives new Live, Processes
 (end a process with pid+start-time identity re-verified at signal
 time), History (a 30-minute in-session scrub), Services and Startup

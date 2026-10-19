@@ -27,6 +27,8 @@ pub struct Profile {
     pub security: SecurityInfo,
     pub power: Vec<BatteryInfo>,
     pub power_detail: PowerDetail,
+    pub upower_devices: Vec<UpowerDevice>,
+    pub power_history: Vec<DeviceHistory>,
     pub pci: Vec<BusDevice>,
     pub usb: Vec<BusDevice>,
     pub audio: Vec<String>,
@@ -396,4 +398,53 @@ pub struct HealthFlag {
     pub component: String,
     pub message: String,
     pub hint: Option<String>,
+}
+
+/// One power device as UPower sees it — a battery, a UPS, or a wireless
+/// peripheral (mouse / keyboard / phone) reporting its own battery. This is
+/// the per-device detail gnome-power-statistics showed; the sysfs
+/// BatteryInfo above only ever sees real system batteries, so on a machine
+/// whose only batteries live in peripherals it saw nothing at all.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpowerDevice {
+    pub path: String,
+    pub native_path: Option<String>,
+    /// upower device class: "battery", "ups", "mouse", "keyboard",
+    /// "phone", "line-power", or whatever else upower names it.
+    pub kind: String,
+    pub label: String,
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    pub state: Option<String>,
+    pub percentage: Option<f64>,
+    pub energy_wh: Option<f64>,
+    pub energy_full_wh: Option<f64>,
+    pub energy_full_design_wh: Option<f64>,
+    pub health_percent: Option<f64>,
+    pub rate_w: Option<f64>,
+    pub voltage_v: Option<f64>,
+    pub time_to_empty_s: Option<i64>,
+    pub time_to_full_s: Option<i64>,
+    pub technology: Option<String>,
+    pub online: Option<bool>,
+}
+
+/// One recorded point from UPower's history files (/var/lib/upower).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HistoryPoint {
+    pub t: i64,
+    pub value: f64,
+    pub state: String,
+}
+
+/// A device's recorded power history — the graphs Power Statistics drew.
+/// Any series may be empty (UPower created the file but recorded nothing).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeviceHistory {
+    pub device_id: String,
+    pub label: String,
+    pub charge: Vec<HistoryPoint>,
+    pub rate: Vec<HistoryPoint>,
+    pub time_empty: Vec<HistoryPoint>,
+    pub time_full: Vec<HistoryPoint>,
 }

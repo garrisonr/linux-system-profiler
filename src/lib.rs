@@ -145,6 +145,8 @@ pub fn collect_profile_with_progress(
     p.security = collect!("security", model::SecurityInfo, collectors::collect_security());
     p.power = collect!("power", Vec<model::BatteryInfo>, collectors::collect_power());
     p.power_detail = collectors::collect_power_detail();
+    p.upower_devices = collectors::collect_upower_devices();
+    p.power_history = collectors::collect_power_history();
     progress("devices");
     let (pci, usb) = collectors::collect_bus();
     p.pci = pci; p.usb = usb;

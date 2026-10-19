@@ -1250,3 +1250,287 @@ mod lsblk_tests {
         assert!(parse_lsblk_partitions("{}").is_empty());
     }
 }
+
+// ── UPower devices + recorded history (the Power Statistics seat) ──────────
+// gnome-power-statistics was a viewer over UPower: the device list, the
+// per-device properties, and the history UPower persists in
+// /var/lib/upower/history-*.dat. These collectors cover that seat.
+
+use crate::model::{DeviceHistory, HistoryPoint, UpowerDevice};
+
+fn parse_float_prefix(s: &str) -> Option<f64> {
+    let t = s.trim();
+    let mut end = 0usize;
+    for (i, c) in t.char_indices() {
+        if c.is_ascii_digit() || c == '.' || (i == 0 && (c == '-' || c == '+')) {
+            end = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        return None;
+    }
+    t[..end].parse::<f64>().ok()
+}
+
+/// "2.4 hours" / "45 minutes" / "30 seconds" -> seconds.
+fn parse_upower_time(s: &str) -> Option<i64> {
+    let t = s.trim().replace(',', "");
+    let v = parse_float_prefix(&t)?;
+    let mult = if t.contains("hour") {
+        3600.0
+    } else if t.contains("minute") {
+        60.0
+    } else {
+        1.0
+    };
+    Some((v * mult).round() as i64)
+}
+
+/// Parse one `upower -i <path>` dump. Pure — fixture-tested below.
+/// The dump's only lines without a ':' are the device-class section
+/// headers ("battery", "mouse", "line power", …); everything else is
+/// key: value, and unknown keys are ignored.
+pub fn parse_upower_device(path: &str, text: &str) -> UpowerDevice {
+    let mut d = UpowerDevice {
+        path: path.to_string(),
+        kind: "unknown".into(),
+        ..Default::default()
+    };
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !trimmed.contains(':') {
+            d.kind = trimmed.to_lowercase().replace(' ', "-");
+            continue;
+        }
+        let mut it = trimmed.splitn(2, ':');
+        let key = it.next().unwrap_or("").trim().to_lowercase();
+        let val = it.next().unwrap_or("").trim().to_string();
+        match key.as_str() {
+            "native-path" => d.native_path = Some(val),
+            "vendor" => d.vendor = Some(val),
+            "model" => d.model = Some(val),
+            "state" => d.state = Some(val),
+            "percentage" => d.percentage = parse_float_prefix(&val),
+            "energy" => d.energy_wh = parse_float_prefix(&val),
+            "energy-full" => d.energy_full_wh = parse_float_prefix(&val),
+            "energy-full-design" => d.energy_full_design_wh = parse_float_prefix(&val),
+            "energy-rate" => d.rate_w = parse_float_prefix(&val),
+            "voltage" => d.voltage_v = parse_float_prefix(&val),
+            "capacity" => {
+                if d.health_percent.is_none() {
+                    d.health_percent = parse_float_prefix(&val);
+                }
+            }
+            "time to empty" => d.time_to_empty_s = parse_upower_time(&val),
+            "time to full" => d.time_to_full_s = parse_upower_time(&val),
+            "technology" => d.technology = Some(val),
+            "online" => d.online = Some(val == "yes"),
+            _ => {}
+        }
+    }
+    if d.health_percent.is_none() {
+        if let (Some(f), Some(dz)) = (d.energy_full_wh, d.energy_full_design_wh) {
+            if dz > 0.0 {
+                d.health_percent = Some(f / dz * 100.0);
+            }
+        }
+    }
+    d.label = d
+        .model
+        .clone()
+        .filter(|m| !m.is_empty())
+        .or_else(|| d.native_path.clone())
+        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string());
+    d
+}
+
+/// Every device UPower currently enumerates — batteries, UPSes, and the
+/// wireless peripherals sysfs never shows. The virtual DisplayDevice is
+/// a client-side composite, not a device; it is skipped.
+pub fn collect_upower_devices() -> Vec<UpowerDevice> {
+    let mut out = Vec::new();
+    if !which("upower") {
+        return out;
+    }
+    let Some(list) = cmd("timeout", &["5", "upower", "-e"]) else {
+        return out;
+    };
+    for path in list
+        .lines()
+        .map(|s| s.trim())
+        .filter(|s| s.starts_with("/org/freedesktop/UPower/devices/") && !s.contains("DisplayDevice"))
+    {
+        if let Some(info) = cmd("timeout", &["5", "upower", "-i", path]) {
+            out.push(parse_upower_device(path, &info));
+        }
+    }
+    out.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.label.cmp(&b.label)));
+    out
+}
+
+/// Parse one history .dat body: "<unix-ts>\t<value>\t<state>" per line.
+pub fn parse_history_dat(text: &str) -> Vec<HistoryPoint> {
+    let mut pts: Vec<HistoryPoint> = text
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split('\t');
+            let t: i64 = it.next()?.trim().parse().ok()?;
+            let value: f64 = it.next()?.trim().parse().ok()?;
+            let state = it.next().unwrap_or("").trim().to_string();
+            Some(HistoryPoint { t, value, state })
+        })
+        .collect();
+    pts.sort_by_key(|p| p.t);
+    pts
+}
+
+fn history_label(id: &str) -> String {
+    let mut s = id.replace('_', " ");
+    if let Some(idx) = s.rfind('-') {
+        if s[idx..].contains(':') {
+            s.truncate(idx);
+        }
+    }
+    s
+}
+
+/// Split a history filename body ("charge-<id>", "time-empty-<id>", …)
+/// into (kind, device id). The two-word kinds must be tried first —
+/// splitting at the first dash would read "time-empty-X" as kind "time".
+pub fn split_history_name(rest: &str) -> Option<(&str, &str)> {
+    if let Some(id) = rest.strip_prefix("time-empty-") {
+        return Some(("time-empty", id));
+    }
+    if let Some(id) = rest.strip_prefix("time-full-") {
+        return Some(("time-full", id));
+    }
+    let dash = rest.find('-')?;
+    Some((&rest[..dash], &rest[dash + 1..]))
+}
+
+/// Recorded power history from /var/lib/upower — including devices that
+/// are not connected right now (their history is the only trace they
+/// leave). Devices whose every series is empty are omitted: a created
+/// but never-recorded file is not a graph. UPower's "generic_id"
+/// placeholder (devices with no serial) is skipped — it carries no
+/// identity a human could act on.
+pub fn collect_power_history() -> Vec<DeviceHistory> {
+    let mut by_id: std::collections::BTreeMap<String, DeviceHistory> =
+        std::collections::BTreeMap::new();
+    let Ok(entries) = fs::read_dir("/var/lib/upower") else {
+        return Vec::new();
+    };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(rest) = name
+            .strip_prefix("history-")
+            .and_then(|r| r.strip_suffix(".dat"))
+        else {
+            continue;
+        };
+        let Some((kind, id)) = split_history_name(rest) else {
+            continue;
+        };
+        if id.starts_with("generic") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let pts = parse_history_dat(&text);
+        let entry = by_id.entry(id.to_string()).or_insert_with(|| DeviceHistory {
+            device_id: id.to_string(),
+            label: history_label(id),
+            ..Default::default()
+        });
+        match kind {
+            "charge" => entry.charge = pts,
+            "rate" => entry.rate = pts,
+            "time-empty" => entry.time_empty = pts,
+            "time-full" => entry.time_full = pts,
+            _ => {}
+        }
+    }
+    by_id
+        .into_values()
+        .filter(|h| {
+            !(h.charge.is_empty()
+                && h.rate.is_empty()
+                && h.time_empty.is_empty()
+                && h.time_full.is_empty())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod ampere_power_tests {
+    use super::*;
+
+    const MOUSE: &str = "  native-path:          hidpp_battery_0\n  model:                Wireless Mouse M510\n  serial:               4a:dc:64:1a\n  power supply:         no\n  updated:              Sun 18 Oct 2026 07:08:34 AM EDT\n  has history:          yes\n  mouse\n    present:             yes\n    rechargeable:        yes\n    state:               discharging\n    warning-level:       none\n    percentage:          55%\n    icon-name:          'battery-good-symbolic'\n";
+
+    const BATTERY: &str = "  native-path:          BAT0\n  vendor:               ACME\n  model:                Pack-42\n  power supply:         yes\n  battery\n    present:             yes\n    state:               discharging\n    energy:              30.5 Wh\n    energy-empty:        0 Wh\n    energy-full:         45 Wh\n    energy-full-design:  48 Wh\n    energy-rate:         12.3 W\n    time to empty:       2.4 hours\n    percentage:          68%\n    capacity:            93.7%\n    technology:          lithium-polymer\n    voltage:             11.4 V\n";
+
+    const LINE_POWER: &str = "  native-path:          AC\n  power supply:         yes\n  updated:              Sun 18 Oct 2026 07:08:34 AM EDT\n  line power\n    online:              yes\n";
+
+    #[test]
+    fn parses_mouse_device() {
+        let d = parse_upower_device("/org/freedesktop/UPower/devices/mouse_hidpp_battery_0", MOUSE);
+        assert_eq!(d.kind, "mouse");
+        assert_eq!(d.label, "Wireless Mouse M510");
+        assert_eq!(d.state.as_deref(), Some("discharging"));
+        assert_eq!(d.percentage, Some(55.0));
+        assert_eq!(d.native_path.as_deref(), Some("hidpp_battery_0"));
+    }
+
+    #[test]
+    fn parses_battery_device_with_health_and_time() {
+        let d = parse_upower_device("/org/freedesktop/UPower/devices/battery_BAT0", BATTERY);
+        assert_eq!(d.kind, "battery");
+        assert_eq!(d.label, "Pack-42");
+        assert_eq!(d.energy_wh, Some(30.5));
+        assert_eq!(d.energy_full_wh, Some(45.0));
+        assert_eq!(d.rate_w, Some(12.3));
+        assert_eq!(d.time_to_empty_s, Some(8640));
+        assert_eq!(d.voltage_v, Some(11.4));
+        // capacity key beats the computed ratio
+        assert_eq!(d.health_percent, Some(93.7));
+    }
+
+    #[test]
+    fn parses_line_power_online() {
+        let d = parse_upower_device("/org/freedesktop/UPower/devices/line_power_AC", LINE_POWER);
+        assert_eq!(d.kind, "line-power");
+        assert_eq!(d.online, Some(true));
+    }
+
+    #[test]
+    fn parses_history_points_and_sorts() {
+        let pts = parse_history_dat("1787331474\t0.000\tunknown\n1787330912\t12.500\tdischarging\n");
+        assert_eq!(pts.len(), 2);
+        assert_eq!(pts[0].t, 1787330912);
+        assert_eq!(pts[0].value, 12.5);
+        assert_eq!(pts[1].state, "unknown");
+    }
+
+    #[test]
+    fn splits_history_names_including_two_word_kinds() {
+        assert_eq!(split_history_name("charge-BAT0"), Some(("charge", "BAT0")));
+        assert_eq!(split_history_name("rate-Wireless_Mouse_M510-4a"), Some(("rate", "Wireless_Mouse_M510-4a")));
+        assert_eq!(split_history_name("time-empty-TCL-98:78"), Some(("time-empty", "TCL-98:78")));
+        assert_eq!(split_history_name("time-full-TCL-98:78"), Some(("time-full", "TCL-98:78")));
+        assert_eq!(split_history_name("nodash"), None);
+    }
+
+    #[test]
+    fn parses_time_units() {
+        assert_eq!(parse_upower_time("2.4 hours"), Some(8640));
+        assert_eq!(parse_upower_time("45 minutes"), Some(2700));
+        assert_eq!(parse_upower_time("30 seconds"), Some(30));
+        assert_eq!(parse_upower_time("1,200 seconds"), Some(1200));
+    }
+}

@@ -487,12 +487,35 @@ const VIEWS = {
       ["Energy performance preference", d.epp, "epp"],
       ["UPS", d.ups ? [d.ups.model || "UPS", d.ups.state, d.ups.percentage != null ? d.ups.percentage + "%" : null].filter(Boolean).join(" · ") : "none detected"],
     ]);
-    if (p.power.length) h += p.power.map((b) =>
+    const devs = p.upower_devices || [];
+    const seenNative = new Set(devs.map((x) => x.native_path).filter(Boolean));
+    const bats = (p.power || []).filter((b) => !seenNative.has(b.name));
+    if (bats.length) h += bats.map((b) =>
       `<div class="card"><h3>${esc(b.name)} — ${esc(b.status)}</h3>` +
       `<p>Charge ${esc(b.capacity_percent)}% · health ${b.health_percent != null ? b.health_percent.toFixed(0) + "%" : "—"} · cycles ${esc(b.cycle_count)}</p>` +
       `<p>${esc(b.manufacturer)} ${esc(b.model_name)}</p></div>`).join("");
+    if (devs.length) {
+      h += `<h3>Power devices</h3>` + devs.map((x) => {
+        const bits = [
+          x.state,
+          x.percentage != null ? x.percentage.toFixed(0) + "%" : null,
+          x.rate_w != null ? "drawing " + x.rate_w.toFixed(1) + " W" : null,
+          x.time_to_empty_s != null ? "about " + hrsTxt(x.time_to_empty_s) + " left" : null,
+          x.time_to_full_s != null ? "about " + hrsTxt(x.time_to_full_s) + " to full" : null,
+          x.kind === "battery" && x.health_percent != null ? "health " + x.health_percent.toFixed(0) + "%" : null,
+          x.voltage_v != null ? x.voltage_v.toFixed(1) + " V" : null,
+        ].filter(Boolean).join(" · ");
+        return `<div class="card"><h3>${esc(x.label)} <span class="chip">${esc(x.kind)}</span></h3><p>${esc(bits)}</p></div>`;
+      }).join("");
+    }
+    const hist = (p.power_history || []).map(histCard).join("");
+    if (hist) h += `<h3>Recorded power history</h3>` + hist;
+    if (!bats.length && !devs.length && !hist) {
+      h += `<p class="empty">No battery or power device is talking to this machine right now — desktops and mini PCs often have none. When a wireless mouse, keyboard, or UPS reports a battery, it shows up here with its recorded history.</p>`;
+    }
     return h;
   },
+
   pci(p) {
     const order = ["Graphics & Displays", "Networking", "Storage", "Audio & Multimedia", "Peripherals & USB", "System & Bridges", "Other"];
     const groups = new Map();
@@ -710,6 +733,57 @@ function sparkSvg(points, get, maxV, label) {
     prevTs = pt.ts;
   }
   return `<svg class="spark" viewBox="0 0 300 60" preserveAspectRatio="none" role="img" aria-label="${esc(label)}"><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"/></svg>`;
+}
+
+
+function hrsTxt(s) {
+  if (s == null) return null;
+  if (s >= 5400) return (s / 3600).toFixed(1).replace(/\.0$/, "") + " hours";
+  if (s >= 90) return Math.round(s / 60) + " minutes";
+  return s + " seconds";
+}
+
+function histSvg(points, label) {
+  // Recorded-history chart in the sparkSvg idiom: x from REAL timestamps
+  // (Forge §BX — a gap stays a gap, never a fake bridge). Calm by
+  // construction: one accent stroke, no fill, no glow.
+  if (points.length < 2) return "";
+  const t0 = points[0].t, t1 = points[points.length - 1].t;
+  const span = Math.max(1, t1 - t0);
+  const gaps = [];
+  for (let i = 1; i < points.length; i++) gaps.push(points[i].t - points[i - 1].t);
+  gaps.sort((a, b) => a - b);
+  const med = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
+  const breakAt = Math.max(3600, med * 8);
+  const max = Math.max(1, ...points.map((pt) => pt.value)) * 1.1;
+  let d = "", started = false, prevT = null;
+  for (const pt of points) {
+    const x = ((pt.t - t0) / span * 300).toFixed(1);
+    const y = (56 - Math.min(1, pt.value / max) * 50).toFixed(1);
+    if (!started || (prevT != null && pt.t - prevT > breakAt)) { d += `M${x},${y} `; started = true; }
+    else d += `L${x},${y} `;
+    prevT = pt.t;
+  }
+  return `<svg class="spark" viewBox="0 0 300 60" preserveAspectRatio="none" role="img" aria-label="${esc(label)}"><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"/></svg>`;
+}
+
+function histCard(hh) {
+  const series = [
+    ["Charge", hh.charge, "pct"],
+    ["Power rate", hh.rate, "w"],
+    ["Time to empty", hh.time_empty, "time"],
+    ["Time to full", hh.time_full, "time"],
+  ].filter(([, pts]) => pts && pts.length);
+  if (!series.length) return "";
+  let h = `<div class="card"><h3>${esc(hh.label)}</h3>`;
+  for (const [name, pts, kind] of series) {
+    const latest = pts[pts.length - 1];
+    const valTxt = kind === "time" ? hrsTxt(latest.value) : kind === "w" ? latest.value + " W" : latest.value + "%";
+    const when = new Date(latest.t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    h += `<h4>${esc(name)} — last reading ${esc(valTxt)} · ${esc(when)}</h4>`;
+    h += pts.length >= 2 ? histSvg(pts, hh.label + " " + name) : `<p class="empty">Only one reading recorded so far.</p>`;
+  }
+  return h + `</div>`;
 }
 
 listen("live-sample", (e) => {
