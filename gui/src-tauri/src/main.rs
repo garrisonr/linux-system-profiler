@@ -626,6 +626,28 @@ async fn refresh_update_check(cache: State<'_, ProfileCache>, renders: State<'_,
     Ok(info)
 }
 
+/// Recount (v0.8.10): a plain re-collect of ONLY the updates — no
+/// elevation, no list refresh. The Updates view auto-runs this when
+/// the counts it is about to show have aged past the threshold: the
+/// profile is a launch-time snapshot, and a window left open across
+/// an update run otherwise keeps offering updates the system already
+/// applied (the phantom panel, 2026-10-18). Re-counting needs no
+/// root — only refreshing the package LISTS does, and that stays
+/// behind the explicit Check, as designed in v0.8.8. The fresh info
+/// is stamped with its collect time (collect_updates) and swapped
+/// into the cached profile so every view agrees.
+#[tauri::command]
+async fn recount_updates(cache: State<'_, ProfileCache>, renders: State<'_, RenderCache>) -> Result<linux_system_profiler::model::UpdatesInfo, String> {
+    let info = tauri::async_runtime::spawn_blocking(
+        linux_system_profiler::updates::collect_updates,
+    ).await.map_err(|e| e.to_string())?;
+    if let Some(p) = cache.0.lock().unwrap().as_mut() {
+        p.updates = info.clone();
+        clear_render_cache(&renders);
+    }
+    Ok(info)
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(ProfileCache::default())
@@ -634,7 +656,7 @@ fn main() {
             get_profile, get_dep_status, install_deps, copy_forum,
             share_copy, share_save, share_email, copy_text, open_url,
             run_disk_test, run_network_test, apply_updates, elevated_dmi,
-            refresh_update_check, full_upgrade_preflight, apply_full_upgrade
+            refresh_update_check, recount_updates, full_upgrade_preflight, apply_full_upgrade
         ])
         .run(tauri::generate_context!())
         .expect("error while running Linux System Profiler");

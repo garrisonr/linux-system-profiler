@@ -336,6 +336,16 @@ pub struct UpdatesInfo {
     /// known-current rather than inherited from old lists.
     #[serde(default)]
     pub refreshed_this_check: bool,
+    /// ISO-8601 moment THIS snapshot was collected (stamped by
+    /// collect_updates). The Updates surface renders its age next to
+    /// the counts: a profile in a long-lived window is a photograph,
+    /// not a fact, and until v0.8.10 the Overview card asserted
+    /// "checked just now" for a snapshot of arbitrary age — the
+    /// phantom-panel wound (Recount, 2026-10-18: the panel offered
+    /// updates apt had already applied hours earlier). "Checked" is
+    /// a timestamp, not a boolean.
+    #[serde(default)]
+    pub collected_at: Option<String>,
 }
 
 /// Why an update can or can't install right now — classified in Rust at

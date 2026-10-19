@@ -158,10 +158,22 @@ fn stale_note(now: std::time::SystemTime, last: Option<std::time::SystemTime>) -
     }
 }
 
+/// Stamp an UpdatesInfo with the moment it was collected. The
+/// Updates surface renders this age beside the counts — a snapshot
+/// from a long-lived window is a photograph, not a fact (Recount,
+/// 2026-10-18: a panel left open across an update run kept offering
+/// updates apt had already applied). Pure in `now` so tests can pin
+/// the exact ISO string.
+pub fn stamp_collected(info: &mut UpdatesInfo, now: std::time::SystemTime) {
+    info.collected_at = now.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| iso_from_unix(d.as_secs())).ok();
+}
+
 /// Stamp an UpdatesInfo collected right after a metadata refresh (the
 /// explicit Check flow): this scan's counts are known-current. Keeps
 /// the structured fields and the note coherent in one place.
 pub fn mark_refreshed(info: &mut UpdatesInfo) {
+    stamp_collected(info, std::time::SystemTime::now());
     info.refreshed_this_check = true;
     info.metadata_stale = false;
     info.metadata_last_refresh = freshness_fields(std::time::SystemTime::now(), apt_lists_refreshed_at()).0
@@ -732,6 +744,7 @@ pub fn apply_report(output: String, remaining_items: &[UpdateItem]) -> ApplyRepo
 
 pub fn collect_updates() -> UpdatesInfo {
     let mut info = UpdatesInfo { checked: true, ..Default::default() };
+    stamp_collected(&mut info, std::time::SystemTime::now());
 
     // System packages: Arch / Debian / Fedora families, check-only flags only.
     if which("pacman") {
@@ -984,6 +997,40 @@ mod tests {
         assert!(info.metadata_last_refresh.is_some());
         assert!(info.notes.iter().all(|n| !n.contains("may be out of date")));
         assert!(info.notes[0].contains("refreshed just now"));
+    }
+
+    #[test]
+    fn collected_at_stamps_the_collect_moment() {
+        // Recount: the snapshot carries WHEN it was taken, so the
+        // surface can age it instead of asserting "checked just now".
+        use std::time::{Duration, SystemTime};
+        let mut info = UpdatesInfo::default();
+        assert!(info.collected_at.is_none());
+        stamp_collected(&mut info, SystemTime::UNIX_EPOCH + Duration::from_secs(1_761_000_000));
+        assert_eq!(info.collected_at.as_deref(), Some("2025-10-20T22:40:00Z"));
+    }
+
+    #[test]
+    fn mark_refreshed_restamps_collected_at() {
+        let mut info = UpdatesInfo {
+            checked: true,
+            collected_at: Some("2020-01-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        mark_refreshed(&mut info);
+        let ts = info.collected_at.expect("mark_refreshed must restamp");
+        assert_ne!(ts, "2020-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn collected_at_absent_in_old_json_defaults_to_none() {
+        // Profiles serialized before v0.8.10 have no collected_at;
+        // they must still load, with the age honestly unknown.
+        let info: UpdatesInfo = serde_json::from_str(
+            "{\"checked\":true,\"system_updates\":[],\"firmware_updates\":[],\"flatpak_updates\":[],\"notes\":[]}")
+            .expect("pre-v0.8.10 updates JSON must deserialize");
+        assert!(info.collected_at.is_none());
+        assert!(!info.metadata_stale);
     }
 
     #[test]

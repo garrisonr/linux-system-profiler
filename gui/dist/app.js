@@ -355,7 +355,7 @@ const VIEWS = {
       p.software.last_upgrade ? "last full upgrade " + p.software.last_upgrade : null]);
     h += linkCard("updates", "Updates", [
       upd ? upd + " updates available" : "Everything up to date",
-      p.updates.checked ? "checked just now" : null], upd ? String(upd) : null);
+      updatesAsOf(p.updates) ? "counts as of " + updatesAsOf(p.updates).when : (p.updates.checked ? "checked" : null)], upd ? String(upd) : null);
     if (p.power.length) h += linkCard("power", "Power", p.power.map((b) =>
       b.name + " " + o(b.capacity_percent) + "% · health " + (b.health_percent != null ? b.health_percent.toFixed(0) + "%" : "—")));
     h += `<p class="empty">Profile generated ${esc(p.generated_at)} · tool v${esc(p.tool_version)} — tap any card for details.</p>`;
@@ -619,6 +619,14 @@ const VIEWS = {
       (p.updates.system_updates[0] || {}).source] || "system-arch";
     let h = `<div class="row"><button class="pill secondary" data-check-updates type="button">Check for updates</button>` +
       `<span class="empty" data-check-status></span></div>`;
+    /* Recount (v0.8.10): the counts say when they were counted —
+       a snapshot's age is part of its truth. Past 15 minutes the
+       line takes the stale styling; opening this view with counts
+       older than 10 minutes recounts them automatically. */
+    const asOf = updatesAsOf(p.updates);
+    if (asOf) {
+      h += `<p class="${asOf.old ? "stale-note" : "empty"}">${asOf.old ? "⚠ " : ""}Counts as of ${esc(asOf.when)} — counted ${esc(asOf.ago)}.${asOf.old ? " This tab recounts on its own when the counts get old; “Check for updates” also refreshes the package lists." : ""}</p>`;
+    }
     // Stale counts SAY they're stale (v0.8.8): the launch scan reads
     // the lists on disk; when they're older than apt's daily refresh
     // rhythm the banner names it instead of letting old counts pose
@@ -713,6 +721,7 @@ function select(id) {
   renderRail();
   wireDetail();
   $("app").classList.add("show-detail");
+  if (id === "updates") maybeAutoRecount();
 }
 
 function miniFlag(dot, html, goto) {
@@ -868,6 +877,51 @@ function askConfirm(title, body, okLabel, danger) {
     sheet.oncancel = () => resolve(false);
     sheet.showModal();
   });
+}
+
+/* Recount (v0.8.10): an updates snapshot knows when it was counted.
+   Render that age wherever its counts appear — "checked" is a
+   timestamp, not a boolean. Returns null for snapshots that predate
+   the stamp: their age is honestly unknown, so nothing is claimed. */
+function updatesAsOf(u) {
+  if (!u || !u.collected_at) return null;
+  const t = Date.parse(u.collected_at);
+  if (isNaN(t)) return null;
+  const secs = Math.max(0, (Date.now() - t) / 1000);
+  const when = new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  let ago;
+  if (secs < 90) ago = "just now";
+  else if (secs < 3600) ago = Math.floor(secs / 60) + " min ago";
+  else if (secs < 48 * 3600) ago = Math.floor(secs / 3600) + " h ago";
+  else ago = Math.floor(secs / 86400) + " d ago";
+  return { when, ago, secs, old: secs > 900 };
+}
+
+/* Recount (v0.8.10): opening the Updates view with counts older
+   than 10 minutes recounts them on the spot — unelevated, so no
+   password prompt; refreshing the package LISTS stays behind the
+   explicit Check. A window left open across an update run can no
+   longer keep offering updates the system already applied (the
+   phantom panel, 2026-10-18). Guarded to at most once per 10
+   minutes; failures stay silent because the as-of line above the
+   counts already tells the truth. */
+let lastAutoRecount = 0;
+async function maybeAutoRecount() {
+  if (!P || !P.updates) return;
+  const a = updatesAsOf(P.updates);
+  if (!a || a.secs < 600) return;
+  const now = Date.now();
+  if (now - lastAutoRecount < 600000) return;
+  lastAutoRecount = now;
+  try {
+    P.updates = await invoke("recount_updates");
+    renderNav();
+    if (current === "updates") {
+      select("updates");
+      const st = document.querySelector("[data-check-status]");
+      if (st) st.textContent = "These counts had aged — recounted automatically just now.";
+    }
+  } catch (e) { /* older backend or a failed collect: the as-of line stands */ }
 }
 
 /* Explicit Check: on apt the backend first refreshes the package lists
