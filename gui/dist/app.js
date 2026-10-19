@@ -1012,18 +1012,25 @@ wireDetail = function () {
     const tb = $("procTreeBtn");
     if (tb) tb.addEventListener("click", () => { procTree = !procTree; select("processes"); });
     const body = $("procBody");
-    if (body) body.addEventListener("click", (ev) => {
-      const th = ev.target.closest("[data-sort]");
-      if (th) {
-        const k = th.dataset.sort;
-        if (k === "disk") return;
-        if (procSort.key === k) procSort.dir *= -1; else procSort = { key: k, dir: k === "name" || k === "user" ? 1 : -1 };
-        renderProcBody();
-        return;
-      }
-      const btn = ev.target.closest("[data-end]");
-      if (btn) endProcess(btn);
-    });
+    if (body) {
+      body.addEventListener("click", (ev) => {
+        const th = ev.target.closest("[data-sort]");
+        if (th) {
+          const k = th.dataset.sort;
+          if (k === "disk") return;
+          if (procSort.key === k) procSort.dir *= -1; else procSort = { key: k, dir: k === "name" || k === "user" ? 1 : -1 };
+          renderProcBody();
+        }
+      });
+      // Row actions fire on pointerdown, not click: the table re-renders
+      // every sample, and a click split across a re-render retargets to
+      // the row cell and is lost (proven in the v0.9.0 rig — clicks on End
+      // vanished). pointerdown lands on the real button, every time.
+      body.addEventListener("pointerdown", (ev) => {
+        const btn = ev.target.closest("[data-end]");
+        if (btn) endProcess(btn);
+      });
+    }
   }
   if (current === "history") {
     const slider = $("histSlider");
@@ -1033,7 +1040,8 @@ wireDetail = function () {
   }
   if (current === "services") {
     const body = $("svcBody");
-    if (body) body.addEventListener("click", (ev) => {
+    // pointerdown for the same re-render reason as the Processes table.
+    if (body) body.addEventListener("pointerdown", (ev) => {
       const btn = ev.target.closest("[data-svc]");
       if (btn) serviceAction(btn);
     });
