@@ -1303,4 +1303,25 @@ mod tests {
         let (_, safe) = apply_command("system-apt").unwrap();
         assert!(!safe.join(" ").contains("full-upgrade"));
     }
+    #[test]
+    fn failure_records_round_trip_and_clear() {
+        let dir = std::env::temp_dir().join(format!("lsp-failrec-test-{}", std::process::id()));
+        let rec = UpdateFailure {
+            group: "flatpak".into(), kind: "group".into(), label: "Flatpak apps".into(),
+            when_unix: 123, headline: "The update didn't finish.".into(), detail: "raw".into(),
+        };
+        record_update_failure(&dir, rec);
+        let loaded = load_update_failures(&dir);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].group, "flatpak");
+        assert_eq!(loaded[0].headline, "The update didn't finish.");
+        // A second failure for the SAME group replaces, never stacks.
+        let mut rec2 = loaded[0].clone(); rec2.headline = "Second failure.".into();
+        record_update_failure(&dir, rec2);
+        assert_eq!(load_update_failures(&dir).len(), 1);
+        clear_update_failure(&dir, "flatpak");
+        assert!(load_update_failures(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
