@@ -1,72 +1,72 @@
 /* Linux System Profiler — distro themes.
-   Each theme restyles the design tokens so the app blends into its host:
-   accent, materials, corner radii, density and type follow the distro's own
-   design language. Cupertino = the app's native Apple-style language.
-   Light tokens first, dark under prefers-color-scheme where the distro
-   ships both. */
+   VIZSLA RULE (v0.8.11, Dickles 2026-10-18): themes are PALETTES AND
+   MATERIALS ONLY — accent, surfaces, ink, lines, blur. Type and
+   geometry are kit-owned (app.css tokens: --font-*, --fs-*,
+   --radius-s/m/l, --control-h) and are IDENTICAL in every theme.
+   A theme may never set a font-family, a font-size, or a radius:
+   switching themes changes the paint, never the shape or the voice.
+   (Phosh expresses its roomier density through the kit's --density /
+   --font-scale tokens only.) Cupertino = the app's native language. */
 
 /* — Bondi: Dickles' own theme — candy iMac era, smoke graphite + Bondi blue — */
-[data-theme="bondi"] { color-scheme: dark; --canvas:#232326; --accent:#2ba3c7; --ink:#e8e8ea; --ink-2:#a8a8b0; --paper:rgba(35,35,38,.94); --rail:rgba(27,27,30,.96); --line:rgba(255,255,255,.1); --radius:9px; --card-radius:12px; --blur:18px; --green:#a8c73c; --amber:#f2912c; --red:#e05a4e; font-family:system-ui,"Inter",sans-serif; }
+[data-theme="bondi"] { color-scheme: dark; --canvas:#232326; --accent:#2ba3c7; --ink:#e8e8ea; --ink-2:#a8a8b0; --paper:rgba(35,35,38,.94); --rail:rgba(27,27,30,.96); --line:rgba(255,255,255,.1); --blur:18px; --green:#a8c73c; --amber:#f2912c; --red:#e05a4e; }
 
 /* — Zorin OS: Zorin Blue, pale panels, Inter — */
-[data-theme="zorin"] { --canvas:#f2f4f7; --accent:#175ddc; --ink:#1b1d21; --ink-2:#5f6368; --paper:rgba(255,255,255,.85); --rail:rgba(242,244,247,.88); --line:rgba(0,0,0,.09); --radius:8px; --card-radius:12px; font-family:"Inter",system-ui,sans-serif; }
+[data-theme="zorin"] { --canvas:#f2f4f7; --accent:#175ddc; --ink:#1b1d21; --ink-2:#5f6368; --paper:rgba(255,255,255,.85); --rail:rgba(242,244,247,.88); --line:rgba(0,0,0,.09); }
 @media (prefers-color-scheme: dark) { [data-theme="zorin"] { --canvas:#202226; --ink:#eef1f5; --ink-2:#a7adb6; --paper:rgba(32,34,38,.86); --rail:rgba(24,25,28,.9); --line:rgba(255,255,255,.1); } }
 
-/* — Deepin: glassy, deep blur, big soft corners, Deepin blue — */
-[data-theme="deepin"] { --canvas:#eef4fb; --accent:#0081ff; --ink:#1f2329; --ink-2:#5e6a77; --paper:rgba(255,255,255,.62); --rail:rgba(255,255,255,.55); --line:rgba(0,0,0,.06); --radius:10px; --card-radius:18px; --blur:34px; }
+/* — Deepin: glassy, deep blur, Deepin blue — */
+[data-theme="deepin"] { --canvas:#eef4fb; --accent:#0081ff; --ink:#1f2329; --ink-2:#5e6a77; --paper:rgba(255,255,255,.62); --rail:rgba(255,255,255,.55); --line:rgba(0,0,0,.06); --blur:34px; }
 @media (prefers-color-scheme: dark) { [data-theme="deepin"] { --canvas:#181c22; --ink:#eef3f8; --ink-2:#9fb0c1; --paper:rgba(24,28,34,.62); --rail:rgba(18,22,28,.6); --line:rgba(255,255,255,.09); } }
 
-/* — Omarchy: Tokyo Night dark, sharp blue accent, mono-flavored — */
-[data-theme="omarchy"] { --canvas:#1a1b26; --accent:#7aa2f7; --ink:#c0caf5; --ink-2:#828bb8; --paper:rgba(26,27,38,.92); --rail:rgba(19,20,30,.94); --line:rgba(122,162,247,.16); --radius:6px; --card-radius:10px; --green:#9ece6a; --amber:#e0af68; --red:#f7768e; font-family:"JetBrains Mono",ui-monospace,system-ui,sans-serif; }
-[data-theme="omarchy"] .machine-name, [data-theme="omarchy"] h1, [data-theme="omarchy"] h3 { letter-spacing:0; }
+/* — Omarchy: Tokyo Night dark, sharp blue accent — */
+[data-theme="omarchy"] { --canvas:#1a1b26; --accent:#7aa2f7; --ink:#c0caf5; --ink-2:#828bb8; --paper:rgba(26,27,38,.92); --rail:rgba(19,20,30,.94); --line:rgba(122,162,247,.16); --green:#9ece6a; --amber:#e0af68; --red:#f7768e; }
 
-/* — Fedora / GNOME Adwaita: GNOME blue, warm paper, Cantarell, round — */
-[data-theme="fedora"] { --canvas:#fafaf9; --accent:#3584e4; --ink:#241f19; --ink-2:#5e5c51; --paper:rgba(250,250,249,.9); --rail:rgba(246,245,244,.92); --line:rgba(0,0,0,.09); --radius:9px; --card-radius:12px; font-family:"Cantarell","Inter",system-ui,sans-serif; }
+/* — Fedora / GNOME Adwaita: GNOME blue, warm paper — */
+[data-theme="fedora"] { --canvas:#fafaf9; --accent:#3584e4; --ink:#241f19; --ink-2:#5e5c51; --paper:rgba(250,250,249,.9); --rail:rgba(246,245,244,.92); --line:rgba(0,0,0,.09); }
 @media (prefers-color-scheme: dark) { [data-theme="fedora"] { --canvas:#242424; --ink:#eeeeec; --ink-2:#a6a49c; --paper:rgba(36,36,36,.92); --rail:rgba(30,30,30,.94); --line:rgba(255,255,255,.1); } }
 
-/* — elementary OS: Blueberry accent, near-flat, airy, Inter — */
-[data-theme="elementary"] { --canvas:#fafafa; --accent:#3689e6; --ink:#333333; --ink-2:#666666; --paper:rgba(250,250,250,.94); --rail:rgba(245,245,245,.96); --line:rgba(0,0,0,.07); --radius:6px; --card-radius:8px; font-family:"Inter","Open Sans",system-ui,sans-serif; }
+/* — elementary OS: Blueberry accent, near-flat, airy — */
+[data-theme="elementary"] { --canvas:#fafafa; --accent:#3689e6; --ink:#333333; --ink-2:#666666; --paper:rgba(250,250,250,.94); --rail:rgba(245,245,245,.96); --line:rgba(0,0,0,.07); }
 @media (prefers-color-scheme: dark) { [data-theme="elementary"] { --accent:#64baff; --canvas:#282828; --ink:#ececec; --ink-2:#a6a6a6; --paper:rgba(40,40,40,.94); --rail:rgba(34,34,34,.96); --line:rgba(255,255,255,.09); } }
 
-/* — Ubuntu Yaru: Ubuntu orange + aubergine shadows, Ubuntu font — */
-[data-theme="ubuntu"] { --canvas:#f7f7f7; --accent:#e95420; --ink:#2c2c2c; --ink-2:#666666; --paper:rgba(247,247,247,.9); --rail:rgba(240,240,240,.92); --line:rgba(0,0,0,.1); --radius:8px; --card-radius:8px; font-family:"Ubuntu","Inter",system-ui,sans-serif; }
+/* — Ubuntu Yaru: Ubuntu orange + aubergine shadows — */
+[data-theme="ubuntu"] { --canvas:#f7f7f7; --accent:#e95420; --ink:#2c2c2c; --ink-2:#666666; --paper:rgba(247,247,247,.9); --rail:rgba(240,240,240,.92); --line:rgba(0,0,0,.1); }
 @media (prefers-color-scheme: dark) { [data-theme="ubuntu"] { --accent:#f47421; --canvas:#2b0a20; --ink:#f2f2f2; --ink-2:#a6a6a6; --paper:rgba(43,10,32,.9); --rail:rgba(34,8,26,.93); --line:rgba(255,255,255,.11); } }
 
-/* — Phosh: phone shell rules — big targets, dense dark chrome, GNOME blue —
-   Also forces roomy density regardless of window size. */
-[data-theme="phosh"] { --canvas:#242424; --accent:#3584e4; --ink:#eeeeec; --ink-2:#a6a49c; --paper:rgba(36,36,36,.96); --rail:rgba(0,0,0,.94); --line:rgba(255,255,255,.12); --radius:12px; --card-radius:16px; --control-h:2.75rem; font-family:"Cantarell",system-ui,sans-serif; font-size:106%; }
-[data-theme="phosh"] .tree button { height: 3rem; font-size: 1.05rem; }
-[data-theme="phosh"] .pill { font-size: 1rem; }
+/* — Phosh: phone shell palette — big targets come from the kit's
+   density token, not from per-theme type or geometry rules. */
+[data-theme="phosh"] { --canvas:#242424; --accent:#3584e4; --ink:#eeeeec; --ink-2:#a6a49c; --paper:rgba(36,36,36,.96); --rail:rgba(0,0,0,.94); --line:rgba(255,255,255,.12); --density:1.375; --font-scale:1.06; }
 
 /* — Pop!_OS / COSMIC: warm dark slate, Pop orange — */
-[data-theme="pop"] { color-scheme: dark; --canvas:#2b2b2b; --accent:#faa41a; --ink:#f0efed; --ink-2:#a8a49e; --paper:rgba(43,43,43,.94); --rail:rgba(34,34,34,.96); --line:rgba(255,255,255,.1); --radius:9px; --card-radius:12px; font-family:"Fira Sans","Inter",system-ui,sans-serif; }
+[data-theme="pop"] { color-scheme: dark; --canvas:#2b2b2b; --accent:#faa41a; --ink:#f0efed; --ink-2:#a8a49e; --paper:rgba(43,43,43,.94); --rail:rgba(34,34,34,.96); --line:rgba(255,255,255,.1); }
 
 /* — Linux Mint / Mint-Y: soft gray-green, Mint green accent — */
-[data-theme="mint"] { --canvas:#f4f6f1; --accent:#92b372; --ink:#2e3436; --ink-2:#5c6660; --paper:rgba(247,248,245,.92); --rail:rgba(240,242,238,.94); --line:rgba(0,0,0,.09); --radius:8px; --card-radius:10px; }
+[data-theme="mint"] { --canvas:#f4f6f1; --accent:#92b372; --ink:#2e3436; --ink-2:#5c6660; --paper:rgba(247,248,245,.92); --rail:rgba(240,242,238,.94); --line:rgba(0,0,0,.09); }
 @media (prefers-color-scheme: dark) { [data-theme="mint"] { --canvas:#2b2e2b; --ink:#e6eae2; --ink-2:#a3aca0; --paper:rgba(43,46,43,.92); --rail:rgba(36,38,36,.94); --line:rgba(255,255,255,.1); } }
 
-/* — KDE Breeze: cool light gray, Breeze blue, big airy radii — */
-[data-theme="breeze"] { --canvas:#eff0f1; --accent:#3daee9; --ink:#232627; --ink-2:#5d6265; --paper:rgba(239,240,241,.92); --rail:rgba(230,231,233,.94); --line:rgba(0,0,0,.1); --radius:8px; --card-radius:12px; font-family:"Noto Sans","Inter",system-ui,sans-serif; }
+/* — KDE Breeze: cool light gray, Breeze blue — */
+[data-theme="breeze"] { --canvas:#eff0f1; --accent:#3daee9; --ink:#232627; --ink-2:#5d6265; --paper:rgba(239,240,241,.92); --rail:rgba(230,231,233,.94); --line:rgba(0,0,0,.1); }
 @media (prefers-color-scheme: dark) { [data-theme="breeze"] { --canvas:#2a2e30; --ink:#eff0f1; --ink-2:#a5a8aa; --paper:rgba(42,46,48,.92); --rail:rgba(35,38,40,.94); --line:rgba(255,255,255,.11); } }
 
 /* — openSUSE: fresh green on pale sage — */
-[data-theme="opensuse"] { --canvas:#f3f6ee; --accent:#73ba25; --ink:#26331f; --ink-2:#5a6b52; --paper:rgba(248,250,245,.92); --rail:rgba(241,245,238,.94); --line:rgba(0,0,0,.09); --radius:8px; --card-radius:10px; }
+[data-theme="opensuse"] { --canvas:#f3f6ee; --accent:#73ba25; --ink:#26331f; --ink-2:#5a6b52; --paper:rgba(248,250,245,.92); --rail:rgba(241,245,238,.94); --line:rgba(0,0,0,.09); }
 @media (prefers-color-scheme: dark) { [data-theme="opensuse"] { --canvas:#21281d; --ink:#e8efe0; --ink-2:#a9b8a0; --paper:rgba(33,40,29,.92); --rail:rgba(27,33,23,.94); --line:rgba(255,255,255,.1); } }
 
 /* — Manjaro: dark slate, Maia teal-green — */
-[data-theme="manjaro"] { color-scheme: dark; --canvas:#22262a; --accent:#16a085; --ink:#e8ecef; --ink-2:#98a2ab; --paper:rgba(34,38,42,.94); --rail:rgba(27,30,34,.96); --line:rgba(255,255,255,.1); --radius:8px; --card-radius:10px; }
+[data-theme="manjaro"] { color-scheme: dark; --canvas:#22262a; --accent:#16a085; --ink:#e8ecef; --ink-2:#98a2ab; --paper:rgba(34,38,42,.94); --rail:rgba(27,30,34,.96); --line:rgba(255,255,255,.1); }
 
 /* — EndeavourOS: deep purple-dark, lavender accent — */
-[data-theme="endeavour"] { color-scheme: dark; --canvas:#282a36; --accent:#a06cd5; --ink:#f8f8f2; --ink-2:#a49ec4; --paper:rgba(40,42,54,.94); --rail:rgba(32,34,44,.96); --line:rgba(255,255,255,.1); --radius:8px; --card-radius:12px; }
+[data-theme="endeavour"] { color-scheme: dark; --canvas:#282a36; --accent:#a06cd5; --ink:#f8f8f2; --ink-2:#a49ec4; --paper:rgba(40,42,54,.94); --rail:rgba(32,34,44,.96); --line:rgba(255,255,255,.1); }
 
 /* — Garuda Dr460nized: near-black plum, hot pink-red accent — */
-[data-theme="garuda"] { color-scheme: dark; --canvas:#1a1824; --accent:#e2436b; --ink:#e5e9f0; --ink-2:#9aa3b8; --paper:rgba(26,24,36,.94); --rail:rgba(20,18,29,.96); --line:rgba(226,67,107,.22); --radius:8px; --card-radius:12px; }
+[data-theme="garuda"] { color-scheme: dark; --canvas:#1a1824; --accent:#e2436b; --ink:#e5e9f0; --ink-2:#9aa3b8; --paper:rgba(26,24,36,.94); --rail:rgba(20,18,29,.96); --line:rgba(226,67,107,.22); }
 
 /* — Peppermint: charcoal + candy red — */
-[data-theme="peppermint"] { color-scheme: dark; --canvas:#262022; --accent:#c0392b; --ink:#f2ecec; --ink-2:#b3a6a6; --paper:rgba(38,32,34,.94); --rail:rgba(30,25,27,.96); --line:rgba(255,255,255,.1); --radius:8px; --card-radius:10px; }
+[data-theme="peppermint"] { color-scheme: dark; --canvas:#262022; --accent:#c0392b; --ink:#f2ecec; --ink-2:#b3a6a6; --paper:rgba(38,32,34,.94); --rail:rgba(30,25,27,.96); --line:rgba(255,255,255,.1); }
 
 /* — MX Linux: Xfce utility gray-blue, flat and honest — */
-[data-theme="mx"] { --canvas:#eceff1; --accent:#546e7a; --ink:#263238; --ink-2:#5f737c; --paper:rgba(243,245,246,.94); --rail:rgba(236,239,241,.96); --line:rgba(0,0,0,.11); --radius:6px; --card-radius:8px; }
+[data-theme="mx"] { --canvas:#eceff1; --accent:#546e7a; --ink:#263238; --ink-2:#5f737c; --paper:rgba(243,245,246,.94); --rail:rgba(236,239,241,.96); --line:rgba(0,0,0,.11); }
 @media (prefers-color-scheme: dark) { [data-theme="mx"] { --canvas:#262e32; --ink:#e3e9ec; --ink-2:#9db0b8; --paper:rgba(38,46,50,.94); --rail:rgba(31,38,42,.96); --line:rgba(255,255,255,.11); } }
 
 /* Dark-native engines: keep native controls (selects, scrollbars) legible */
@@ -74,8 +74,8 @@
 
 /* — Liquid Glass (BRAND — shared with Fable Files, see BRAND-THEMES.md):
    frosted translucent panels, bright hairlines, icy sky accent — */
-[data-theme="liquidglass"] { color-scheme: dark; --canvas:#1a202c; --accent:#6fd3ff; --ink:#f5f9ff; --ink-2:#a9bed6; --paper:rgba(26,32,44,.55); --rail:rgba(18,22,32,.58); --line:rgba(255,255,255,.22); --radius:12px; --card-radius:18px; --blur:18px; --green:#7ee2a8; --amber:#ffd479; --red:#ff6b81; font-family:system-ui,"Inter",sans-serif; }
+[data-theme="liquidglass"] { color-scheme: dark; --canvas:#1a202c; --accent:#6fd3ff; --ink:#f5f9ff; --ink-2:#a9bed6; --paper:rgba(26,32,44,.55); --rail:rgba(18,22,32,.58); --line:rgba(255,255,255,.22); --blur:18px; --green:#7ee2a8; --amber:#ffd479; --red:#ff6b81; }
 
 /* — Material You (BRAND — shared with Fable Files): MD3 dark tonal,
-   pill geometry, lavender primary — */
-[data-theme="materialyou"] { color-scheme: dark; --canvas:#141218; --accent:#cfbcff; --ink:#e6e0e9; --ink-2:#9d97a6; --paper:rgba(20,18,24,.95); --rail:rgba(16,13,20,.97); --line:rgba(147,143,153,.38); --radius:16px; --card-radius:24px; --red:#ffb4ab; font-family:"Roboto","Inter",system-ui,sans-serif; }
+   lavender primary — */
+[data-theme="materialyou"] { color-scheme: dark; --canvas:#141218; --accent:#cfbcff; --ink:#e6e0e9; --ink-2:#9d97a6; --paper:rgba(20,18,24,.95); --rail:rgba(16,13,20,.97); --line:rgba(147,143,153,.38); --red:#ffb4ab; }

@@ -1,0 +1,21 @@
+/* Bundled Vizsla type — SIL OFL 1.1, licenses in fonts/LICENSES/.
+   Inter is NOT bundled: it is the system UI font on Zorin (both boxes
+   carry the full family) and the --font-ui stack falls back to
+   system-ui elsewhere. Fraunces / Newsreader / Victor Mono are absent
+   from the boxes' system fonts, so the app carries its own copies
+   (subset: Latin + common punctuation; variable weight axes kept). */
+@font-face {
+  font-family: "Fraunces";
+  src: url("fonts/Fraunces.woff2") format("woff2");
+  font-weight: 400 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Newsreader";
+  src: url("fonts/Newsreader.woff2") format("woff2");
+  font-weight: 400 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Victor Mono";
+  src: url("fonts/VictorMono.woff2") format("woff2");
+  font-weight: 400 700; font-style: normal; font-display: swap;
+}

@@ -575,6 +575,7 @@ const VIEWS = {
         ["Privacy", "Everything is gathered locally on this machine. The only network traffic is update checks and the speed test. Copy & Share's sanitized report strips serials, MACs, private addresses and usernames before anything leaves the app."],
         ["Dependencies", "Missing probe tools (lsusb, smartctl, lspci, fwupdmgr) are detected and can be installed with one click — the app fixes its own dependencies."],
         ["License", "MIT"],
+        ["Fonts", "Inter (UI) · Fraunces (display) · Newsreader (reading) · Victor Mono (data) — all SIL Open Font License 1.1. Fraunces, Newsreader and Victor Mono are bundled with the app; Inter comes from your system. Set in the Vizsla OS type program."],
       ]);
     h += `<h3>Help &amp; feedback</h3>
       <p>Found something wrong, or wishing for a feature? File it where the work happens. The bug form arrives pre-filled with this machine's basics — versions and hardware, never serials or addresses.</p>
@@ -589,7 +590,7 @@ const VIEWS = {
   themes(p) {
     // The gallery's own home since v0.8.5 (it was buried in About). The
     // sidebar footer's distro dropdown stays as the quick-switch mirror.
-    let h = `<p>Themes are organized by <em>design language</em>. Distros that share one (say, Debian and Fedora, both GNOME/Adwaita) are covered by the same theme — the note under each says which family it belongs to. Auto matches this machine's distro.</p>
+    let h = `<p>Themes are organized by <em>design language</em>. Distros that share one (say, Debian and Fedora, both GNOME/Adwaita) are covered by the same theme — the note under each says which family it belongs to. Auto matches this machine's distro. A theme changes the colors and materials only — the Vizsla fonts and button shapes stay the same in every theme.</p>
       <div class="theme-grid">` +
       DISTROS.map(([name, engine, note], i) => {
         const pv = ENGINE_PREVIEW[engine];
@@ -602,8 +603,18 @@ const VIEWS = {
     return h;
   },
   updates(p) {
-    const group = (title, items, key, danger, hintKey) =>
-      `<div class="card"><h3>${esc(title)}${hintKey ? hintBtn(hintKey) : ""} — ${items.length} available</h3>` +
+    /* v0.8.11: a group only earns an Apply button when something in it
+       can actually install. Installable = status is not "blocked"
+       (model.rs UpdateStatus: ready / kept_back / phased / held all
+       travel the safe path — v0.8.9's post-apply report classifies
+       what remains; kept_back also has its own full-upgrade card
+       below). A blocked-only group (e.g. containerd alone on the
+       Dell) used to render a big blue Apply that could never succeed:
+       now NO button, one plain sentence instead. The status note is
+       a banner (.update-note), never prose wrapped in a chip. */
+    const group = (title, items, key, danger, hintKey) => {
+      const installable = items.filter((u) => u.status !== "blocked");
+      return `<div class="card"><h3>${esc(title)}${hintKey ? hintBtn(hintKey) : ""} — ${items.length} available</h3>` +
       (items.length
         ? items.slice(0, 60).map((u) => {
           /* v0.8.9: versions AND the plain-English state — the note
@@ -611,10 +622,13 @@ const VIEWS = {
              versions at all ("None -> None" in the text profile). */
           const ver = u.current && u.available ? ` ${esc(u.current)} → ${esc(u.available)}` : "";
           return `<p class="mono">${esc(u.name)}${ver}</p>` +
-            (u.note ? `<p class="mono"><span class="chip">${esc(u.note)}</span></p>` : "");
+            (u.note ? `<p class="update-note">${esc(u.note)}</p>` : "");
         }).join("") +
-          `<div class="row"><button class="pill ${danger ? "danger" : "primary"}" data-apply="${key}" type="button">Apply ${esc(title)} updates</button></div>`
+          (installable.length
+            ? `<div class="row"><button class="pill ${danger ? "danger" : "primary"}" data-apply="${key}" type="button">Apply ${esc(title)} updates</button></div>`
+            : `<p>Nothing here can install yet — each update above says what it's waiting for. The apply button comes back when one of them can.</p>`)
         : `<p>Up to date.</p>`) + `</div>`;
+    };
     const sysKey = { pacman: "system-arch", apt: "system-apt", dnf: "system-dnf" }[
       (p.updates.system_updates[0] || {}).source] || "system-arch";
     let h = `<div class="row"><button class="pill secondary" data-check-updates type="button">Check for updates</button>` +
@@ -1161,7 +1175,7 @@ async function runSpeed(btn) {
     // and carries a Copy button (standing law: an error you can't
     // copy is an error you can't report).
     const msg = String(e);
-    finalEl.innerHTML = `${esc(msg)} <button class="pill mini" type="button" data-copy-speed-error>Copy</button>`;
+    finalEl.innerHTML = `${esc(msg)} <button class="mini-btn" type="button" data-copy-speed-error>Copy</button>`;
     const copyBtn = finalEl.querySelector("[data-copy-speed-error]");
     if (copyBtn) copyBtn.addEventListener("click", async () => {
       const ok = await invoke("copy_text", { text: msg }).catch(() => false);

@@ -3,12 +3,16 @@
 Apple's System Information, for Linux — plus the thing Apple never gave it:
 a single place to see and apply **driver, firmware, and software updates**.
 
-**Status: v0.8.1.** CLI core + Tauri GUI shipped and dogfooded on real
-hardware; under active development. v0.8.1 is the audit fix pass (external
-Gemini audit of v0.8.0): the apt update Apply no longer runs a
-dist-upgrade, an explicit Check refreshes package metadata first, package
-inventory works on dpkg/rpm systems, and Copy & Share renders off the UI
-thread.
+**Status: v0.8.11.** CLI core + Tauri GUI shipped and dogfooded on real
+hardware; under active development. v0.8.11 is the Vizsla style pass:
+the GUI inherits the Vizsla OS Style Guide — one type system (Inter UI ·
+Fraunces display · Newsreader reading · Victor Mono data, OFL) and one
+kit button geometry in every theme (themes are palettes/materials
+only), update status notes render as banners, and a group whose
+updates are all blocked no longer offers an Apply button that can't
+succeed. (v0.8.9 added the plain-English update classifier; v0.8.1's
+audit fixes — safe apt apply, metadata refresh on Check, dpkg/rpm
+inventory, off-thread Copy & Share — all still stand.)
 Apple design language, adaptive desktop / laptop / tablet / phone layouts
 (see `gui/` + `DESIGN.md`). Nineteen theme engines (Auto matches your
 system), Report a Bug / Request a Feature in the About pane.
